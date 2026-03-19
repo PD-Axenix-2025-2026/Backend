@@ -18,6 +18,8 @@ async def test_healthcheck_returns_ok(app) -> None:
 @pytest.mark.asyncio
 async def test_readiness_returns_ok(app) -> None:
     async with app.router.lifespan_context(app):
+        container = app.state.container
+
         async with AsyncClient(
             transport=ASGITransport(app=app),
             base_url="http://testserver",
@@ -26,3 +28,4 @@ async def test_readiness_returns_ok(app) -> None:
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+    assert container.redis_client.ping_calls == 1

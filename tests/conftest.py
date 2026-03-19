@@ -35,6 +35,19 @@ class _FakeSessionFactory:
         return _FakeSessionContext()
 
 
+class _FakeRedisClient:
+    def __init__(self) -> None:
+        self.ping_calls = 0
+        self.closed = False
+
+    async def ping(self) -> bool:
+        self.ping_calls += 1
+        return True
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
 @pytest.fixture
 def app(tmp_path, monkeypatch):
     monkeypatch.setenv(
@@ -42,10 +55,14 @@ def app(tmp_path, monkeypatch):
         "postgresql+asyncpg://postgres:postgres@localhost:5432/pdaxenix_test",
     )
     monkeypatch.setenv("PDAXENIX_APP_ENV", "test")
+    monkeypatch.setenv("PDAXENIX_REDIS_URL", "redis://redis:6379/0")
+    fake_redis_client = _FakeRedisClient()
     monkeypatch.setattr(app_main, "build_engine", lambda _settings: object())
     monkeypatch.setattr(app_main, "build_session_factory", lambda _engine: _FakeSessionFactory())
+    monkeypatch.setattr(app_main, "build_redis_client", lambda _settings: fake_redis_client)
     monkeypatch.setattr(app_main, "init_models", lambda _engine: _async_noop())
     monkeypatch.setattr(app_main, "dispose_engine", lambda _engine: _async_noop())
+    monkeypatch.setattr(app_main, "dispose_redis_client", lambda _redis_client: _async_noop())
     get_settings.cache_clear()
 
     application = app_main.create_app()

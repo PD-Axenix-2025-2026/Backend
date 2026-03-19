@@ -1,0 +1,14 @@
+.git
+.idea
+.pytest_cache
+__pycache__
+*.pyc
+.env
+pdaxenix.db
+tests
+*.xlsx
+*.docx
+*.pdf
+*.pptx
+Architecture.png
+travel-service-ui.html

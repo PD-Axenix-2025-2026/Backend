@@ -1,0 +1,90 @@
+services:
+  backend:
+    profiles: ["dev"]
+    build:
+      context: .
+      target: dev
+    env_file:
+      - .env
+    environment:
+      PDAXENIX_APP_ENV: docker-dev
+      PDAXENIX_DEBUG: "true"
+      PDAXENIX_DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/pdaxenix
+      PDAXENIX_REDIS_URL: redis://redis:6379/0
+    ports:
+      - "${PDAXENIX_BACKEND_PORT:-8000}:8000"
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  backend-prod:
+    profiles: ["prod"]
+    build:
+      context: .
+      target: prod
+    env_file:
+      - .env
+    environment:
+      PDAXENIX_APP_ENV: docker-prod
+      PDAXENIX_DEBUG: "false"
+      PDAXENIX_DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/pdaxenix
+      PDAXENIX_REDIS_URL: redis://redis:6379/0
+    ports:
+      - "${PDAXENIX_BACKEND_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: pdaxenix
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d pdaxenix"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+volumes:
+  postgres_data:

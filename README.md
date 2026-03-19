@@ -6,8 +6,35 @@ Backend-каркас сервиса аналитики маршрутов на F
 
 - FastAPI
 - SQLAlchemy 2.x с асинхронным доступом
-- SQLite на текущем этапе разработки
+- PostgreSQL и Redis в Docker-окружении разработки
+- SQLite как fallback-вариант вне Docker
 - Poetry для управления зависимостями
+- Docker Compose для запуска инфраструктуры
+
+## Docker Compose
+
+Для единообразного окружения разработки сервис можно запускать через Docker Compose вместе с PostgreSQL и Redis.
+
+Dev-режим с hot reload:
+
+```bash
+docker compose --profile dev up --build
+```
+
+Production-like профиль без bind mount и без `--reload`:
+
+```bash
+docker compose --profile prod up --build
+```
+
+При запуске через Compose наружу публикуется только backend:
+
+- API: `http://127.0.0.1:8000`
+- Swagger UI: `http://127.0.0.1:8000/docs`
+- ReDoc: `http://127.0.0.1:8000/redoc`
+
+Внутри Docker backend автоматически использует PostgreSQL и Redis через переменные окружения из `docker-compose.yml`, даже если в локальном `.env` `PDAXENIX_REDIS_URL` оставлен пустым.
+Если порт `8000` уже занят локальным процессом, измените `PDAXENIX_BACKEND_PORT` в `.env`, например на `8001`.
 
 ## Структура проекта
 
@@ -43,7 +70,7 @@ tests/           smoke-тесты wiring и служебных endpoint-ов
    cp .env.example .env
    ```
 
-4. При необходимости изменить значения в `.env`. По умолчанию сервис использует локальный файл SQLite `pdaxenix.db`, который будет создан автоматически.
+4. При необходимости изменить значения в `.env`. Вне Docker по умолчанию используется локальный файл SQLite `pdaxenix.db`, а `PDAXENIX_REDIS_URL` можно оставить пустым: Redis для обычного локального запуска не требуется. Для Docker Compose подключения к PostgreSQL и Redis переопределяются в `docker-compose.yml`.
 
 5. Запустить приложение:
 

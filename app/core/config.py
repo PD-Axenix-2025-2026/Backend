@@ -13,6 +13,7 @@ class Settings(BaseSettings):
         default="sqlite+aiosqlite:///./pdaxenix.db",
         description="Async SQLAlchemy connection URL.",
     )
+    redis_url: str | None = None
     sql_echo: bool = False
 
     model_config = SettingsConfigDict(
