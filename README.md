@@ -80,6 +80,15 @@ tests/           smoke-тесты wiring и служебных endpoint-ов
 
 Приложение автоматически читает переменные из `.env` через `pydantic-settings`.
 
+## Проверка качества кода
+
+Для локальных проверок используются `Ruff` и `mypy`.
+
+- Форматирование: `poetry run ruff format app tests`
+- Проверка форматирования: `poetry run ruff format --check app tests`
+- Линтинг: `poetry run ruff check app tests`
+- Проверка типов: `poetry run mypy app tests`
+
 ## Доступные endpoint-ы
 
 - `GET /api/health`

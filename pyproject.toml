@@ -29,3 +29,42 @@ packages = [{ include = "app" }]
 httpx = ">=0.28.1,<0.29.0"
 pytest = ">=8.3.5,<9.0.0"
 pytest-asyncio = ">=0.26.0,<0.27.0"
+ruff = ">=0.11.0,<0.12.0"
+mypy = ">=1.15.0,<2.0.0"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+src = ["app", "tests"]
+exclude = [
+    ".git",
+    ".idea",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".mypy_cache",
+    "__pycache__",
+    "pdaxenix.db",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "I",
+    "UP",
+    "B",
+]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["app", "tests"]
+exclude = [
+    "(^|/)__pycache__/",
+    "(^|/)\\.pytest_cache/",
+]

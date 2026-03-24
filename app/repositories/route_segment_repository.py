@@ -12,7 +12,9 @@ class RouteSegmentRepository(BaseRepository):
         criteria: RouteSearchCriteria,
     ) -> list[RouteCandidate]:
         origin = select(Location.id).where(Location.code == criteria.origin_code)
-        destination = select(Location.id).where(Location.code == criteria.destination_code)
+        destination = select(Location.id).where(
+            Location.code == criteria.destination_code
+        )
 
         statement: Select[tuple[RouteSegment]] = (
             select(RouteSegment)

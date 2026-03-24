@@ -24,6 +24,8 @@ async def readiness_check(
         if container.redis_client is not None:
             await container.redis_client.ping()
     except Exception as exc:
-        raise HTTPException(status_code=503, detail="Infrastructure dependencies unavailable") from exc
+        raise HTTPException(
+            status_code=503, detail="Infrastructure dependencies unavailable"
+        ) from exc
 
     return HealthResponse(status="ok")

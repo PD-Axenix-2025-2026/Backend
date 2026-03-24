@@ -7,4 +7,6 @@ class LocationService:
         self._location_repository = location_repository
 
     async def list_by_prefix(self, prefix: str, limit: int = 10) -> list[Location]:
-        return await self._location_repository.list_by_prefix(prefix=prefix, limit=limit)
+        return await self._location_repository.list_by_prefix(
+            prefix=prefix, limit=limit
+        )

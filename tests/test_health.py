@@ -1,9 +1,10 @@
 import pytest
+from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 
 @pytest.mark.asyncio
-async def test_healthcheck_returns_ok(app) -> None:
+async def test_healthcheck_returns_ok(app: FastAPI) -> None:
     async with app.router.lifespan_context(app):
         async with AsyncClient(
             transport=ASGITransport(app=app),
@@ -16,7 +17,7 @@ async def test_healthcheck_returns_ok(app) -> None:
 
 
 @pytest.mark.asyncio
-async def test_readiness_returns_ok(app) -> None:
+async def test_readiness_returns_ok(app: FastAPI) -> None:
     async with app.router.lifespan_context(app):
         container = app.state.container
 
