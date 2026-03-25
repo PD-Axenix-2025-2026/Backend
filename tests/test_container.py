@@ -1,7 +1,9 @@
 from datetime import date
+from uuid import uuid4
 
 import pytest
 from app.core.container import AppContainer
+from app.models.enums import LocationType
 from app.services.contracts import RouteSearchCriteria
 from app.services.route_aggregation import RouteAggregationService
 from fastapi import FastAPI
@@ -21,8 +23,10 @@ async def test_container_builds_route_service(app: FastAPI) -> None:
 
             results = await service.search(
                 RouteSearchCriteria(
-                    origin_code="MSQ",
-                    destination_code="LED",
+                    origin_id=uuid4(),
+                    origin_type=LocationType.city,
+                    destination_id=uuid4(),
+                    destination_type=LocationType.city,
                     travel_date=date(2026, 3, 10),
                 )
             )

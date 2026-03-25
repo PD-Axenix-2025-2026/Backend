@@ -37,6 +37,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        await container.shutdown()
         await dispose_redis_client(redis_client)
         await dispose_engine(engine)
 

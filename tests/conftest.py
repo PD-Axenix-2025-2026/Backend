@@ -24,6 +24,9 @@ class _FakeExecuteResult:
     def scalar(self) -> int:
         return 1
 
+    def scalar_one_or_none(self) -> None:
+        return None
+
 
 class _FakeSession:
     async def execute(self, *_args: object, **_kwargs: object) -> _FakeExecuteResult:

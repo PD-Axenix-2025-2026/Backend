@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     )
     redis_url: str | None = None
     sql_echo: bool = False
+    search_ttl_seconds: int = 300
+    search_poll_after_ms: int = 1000
+    mock_checkout_base_url: str = "https://example.com/checkout"
+    checkout_link_ttl_seconds: int = 180
 
     model_config = SettingsConfigDict(
         env_prefix="PDAXENIX_",

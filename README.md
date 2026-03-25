@@ -106,6 +106,11 @@ tests/           smoke-тесты wiring и служебных endpoint-ов
 
 - `GET /api/health`
 - `GET /api/ready`
+- `GET /api/locations`
+- `POST /api/searches`
+- `GET /api/searches/{search_id}/results`
+- `GET /api/routes/{route_id}`
+- `POST /api/routes/{route_id}/checkout-link`
 
 ## Swagger / OpenAPI
 
@@ -117,5 +122,5 @@ tests/           smoke-тесты wiring и служебных endpoint-ов
 
 ## Текущее состояние
 
-На этом этапе подготовлен архитектурный каркас backend-сервиса и внутренние контракты для будущего поиска маршрутов.
-Публичные endpoint-ы поиска маршрутов пока намеренно не реализованы.
+На этом этапе backend уже поддерживает автокомплит локаций, запуск поиска маршрутов, polling результатов, деталку маршрута и mock checkout-link.
+Хранение search state в первой версии реализовано in-memory и не переживает рестарт процесса.
