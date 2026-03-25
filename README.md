@@ -89,6 +89,19 @@ tests/           smoke-тесты wiring и служебных endpoint-ов
 - Линтинг: `poetry run ruff check app tests`
 - Проверка типов: `poetry run mypy app tests`
 
+## CI
+
+В GitHub Actions настроен workflow `CI`. Он запускается на `push` и `pull_request` в ветку `main` и автоматически выполняет:
+
+- `poetry run ruff format --check app tests`
+- `poetry run ruff check app tests`
+- `poetry run mypy app tests`
+- `poetry run pytest -q`
+- `docker compose --profile dev config`
+- `docker compose --profile dev build backend`
+
+Для Docker job в CI используется `.env.example`: перед проверкой compose workflow создаёт временный `.env` на его основе.
+
 ## Доступные endpoint-ы
 
 - `GET /api/health`
