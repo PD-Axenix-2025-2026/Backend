@@ -7,6 +7,12 @@ from sqlalchemy.ext.asyncio import (
 
 from app.core.config import Settings
 from app.models.base import Base
+from app.models.carrier import Carrier
+from app.models.location import Location
+from app.models.route_segment import RouteSegment
+
+# Ensure SQLAlchemy metadata includes all application models before create_all.
+MODEL_REGISTRY = (Carrier, Location, RouteSegment)
 
 
 def build_engine(settings: Settings) -> AsyncEngine:

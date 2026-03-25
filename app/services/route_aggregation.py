@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from app.providers.base import RouteProvider
 from app.services.contracts import RouteCandidate, RouteSearchCriteria
 
@@ -8,7 +10,7 @@ class RouteAggregationService:
 
     async def search(self, criteria: RouteSearchCriteria) -> list[RouteCandidate]:
         aggregated: list[RouteCandidate] = []
-        seen: set[tuple[str, tuple[int, ...]]] = set()
+        seen: set[tuple[str, tuple[UUID, ...]]] = set()
 
         for provider in self._providers:
             routes = await provider.search_routes(criteria)

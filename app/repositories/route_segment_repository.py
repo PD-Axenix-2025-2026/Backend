@@ -1,4 +1,4 @@
-from sqlalchemy import Select, select
+from sqlalchemy import Select, func, or_, select
 
 from app.models.location import Location
 from app.models.route_segment import RouteSegment
@@ -18,9 +18,17 @@ class RouteSegmentRepository(BaseRepository):
 
         statement: Select[tuple[RouteSegment]] = (
             select(RouteSegment)
-            .where(RouteSegment.origin_id.in_(origin))
-            .where(RouteSegment.destination_id.in_(destination))
-            .where(RouteSegment.travel_date == criteria.travel_date)
+            .where(RouteSegment.origin_location_id.in_(origin))
+            .where(RouteSegment.destination_location_id.in_(destination))
+            .where(func.date(RouteSegment.departure_at) == criteria.travel_date)
+            .where(RouteSegment.is_active.is_(True))
+            .where(RouteSegment.valid_from <= func.now())
+            .where(
+                or_(
+                    RouteSegment.valid_to.is_(None),
+                    RouteSegment.valid_to >= func.now(),
+                )
+            )
             .order_by(RouteSegment.departure_at.asc())
         )
         result = await self.session.execute(statement)
@@ -30,10 +38,8 @@ class RouteSegmentRepository(BaseRepository):
             RouteCandidate(
                 source="database",
                 segment_ids=(segment.id,),
-                total_price=segment.price,
-                total_duration_minutes=int(
-                    (segment.arrival_at - segment.departure_at).total_seconds() // 60
-                ),
+                total_price=segment.price_amount,
+                total_duration_minutes=segment.duration_minutes,
                 transfers=0,
             )
             for segment in segments
