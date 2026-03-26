@@ -36,6 +36,105 @@ docker compose --profile prod up --build
 Внутри Docker backend автоматически использует PostgreSQL и Redis через переменные окружения из `docker-compose.yml`, даже если в локальном `.env` `PDAXENIX_REDIS_URL` оставлен пустым.
 Если порт `8000` уже занят локальным процессом, измените `PDAXENIX_BACKEND_PORT` в `.env`, например на `8001`.
 
+## Сценарий работы через Docker
+
+Рекомендуемый dev-flow через Docker Compose:
+
+1. Создать `.env` из шаблона:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+2. Поднять backend, PostgreSQL и Redis:
+
+   ```bash
+   docker compose --profile dev up -d --build
+   ```
+
+3. Заполнить PostgreSQL мок-данными внутри backend-контейнера:
+
+   ```bash
+   docker compose exec backend poetry run python -m app.scripts.seed_mock_data
+   ```
+
+   Для воспроизводимого demo-сценария можно зафиксировать дату:
+
+   ```bash
+   docker compose exec backend poetry run python -m app.scripts.seed_mock_data --base-date 2026-04-14
+   ```
+
+4. Открыть Swagger и проверить API:
+
+   - `http://127.0.0.1:8000/docs`
+   - `GET /api/locations?prefix=Мос`
+   - `GET /api/locations?prefix=Санкт`
+   - `POST /api/searches`
+
+5. Посмотреть логи при необходимости:
+
+   ```bash
+   docker compose logs -f backend
+   ```
+
+6. Остановить окружение:
+
+   ```bash
+   docker compose --profile dev down
+   ```
+
+Важно: seed-команду для Docker нужно запускать именно через `docker compose exec backend ...`, иначе при запуске с хоста она возьмёт локальный `.env` и может писать в SQLite вместо docker PostgreSQL.
+Команда пересоздаёт таблицы `locations`, `carriers` и `route_segments`, поэтому она подходит для dev/demo-окружения, но не для сохранения пользовательских данных.
+
+## Сценарий для фронтенда
+
+Этот сценарий нужен в первую очередь для ручной интеграции фронтенда с backend, а не для backend unit/integration tests.
+
+Рекомендуемый flow:
+
+1. Поднять окружение:
+
+   ```bash
+   cp .env.example .env
+   docker compose --profile dev up -d --build
+   ```
+
+2. Заполнить PostgreSQL фиксированным набором мок-данных:
+
+   ```bash
+   docker compose exec backend poetry run python -m app.scripts.seed_mock_data --base-date 2026-04-14
+   ```
+
+3. Подключить фронтенд к backend по адресу:
+
+   - API: `http://127.0.0.1:8000`
+   - Swagger: `http://127.0.0.1:8000/docs`
+
+4. Проверить пользовательский flow:
+
+   - в поле "Откуда" ввести `Мос`
+   - в поле "Куда" ввести `Санкт` или `Каз`
+   - выбрать дату `2026-04-14`
+   - нажать "Найти"
+   - дождаться polling результатов
+   - открыть деталку маршрута
+   - нажать кнопку перехода / покупки
+
+Для UI-проверки под seeded данными подходят сценарии:
+
+- `Москва -> Санкт-Петербург`, дата `2026-04-14`
+- `Москва -> Казань`, дата `2026-04-14`
+- `Таганрог -> Москва`, дата `2026-04-14`
+
+Что фронтенд должен увидеть:
+
+- автокомплит для `GET /api/locations`
+- после `POST /api/searches` состояние loading/skeleton и пустой список
+- затем непустой ответ из `GET /api/searches/{search_id}/results`
+- рабочие сортировки и фильтры через повторный запрос к `/results`
+- деталку через `GET /api/routes/{route_id}`
+- mock checkout-link через `POST /api/routes/{route_id}/checkout-link`
+
 ## Структура проекта
 
 ```text
@@ -80,6 +179,45 @@ tests/           smoke-тесты wiring и служебных endpoint-ов
    ```
 
 Приложение автоматически читает переменные из `.env` через `pydantic-settings`.
+
+## Заполнение БД мок-данными
+
+Для локальной разработки и интеграции с фронтендом можно заполнить базу детерминированным набором мок-данных:
+
+```bash
+poetry run python -m app.scripts.seed_mock_data
+```
+
+Если backend запущен через Docker Compose, используйте команду внутри контейнера:
+
+```bash
+docker compose exec backend poetry run python -m app.scripts.seed_mock_data
+```
+
+Команда пересоздаёт `locations`, `carriers` и `route_segments`, а затем заново создаёт один и тот же набор данных.
+Это позволяет синхронизировать docker PostgreSQL с текущей ORM-схемой даже после изменения моделей.
+По умолчанию сегменты создаются на даты:
+
+- сегодня
+- завтра
+- через 3 дня
+- через 7 дней
+
+Для воспроизводимого demo-сценария можно зафиксировать базовую дату:
+
+```bash
+poetry run python -m app.scripts.seed_mock_data --base-date 2026-04-14
+```
+
+После заполнения базы можно сразу проверять пользовательские сценарии:
+
+- `GET /api/locations?prefix=Мос`
+- `GET /api/locations?prefix=Санкт`
+- `POST /api/searches` для маршрутов `Москва -> Санкт-Петербург`
+- `POST /api/searches` для маршрутов `Москва -> Казань`
+- `POST /api/searches` для маршрутов `Таганрог -> Москва`
+
+В мок-данных есть города, аэропорты, железнодорожные вокзалы, автовокзал, несколько перевозчиков и прямые сегменты для `plane`, `train` и `bus`.
 
 ## Проверка качества кода
 

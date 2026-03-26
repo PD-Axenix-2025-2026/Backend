@@ -1,5 +1,7 @@
 import logging
+from collections.abc import Sequence
 
+from sqlalchemy import Table
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -47,6 +49,33 @@ async def init_models(engine: AsyncEngine) -> None:
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
     logger.info("Database models initialized")
+
+
+async def recreate_models(
+    engine: AsyncEngine,
+    *,
+    tables: Sequence[Table] | None = None,
+) -> None:
+    table_count = len(tables) if tables is not None else len(Base.metadata.tables)
+    logger.info("Recreating database models table_count=%s", table_count)
+    async with engine.begin() as connection:
+        if tables is None:
+            await connection.run_sync(Base.metadata.drop_all)
+            await connection.run_sync(Base.metadata.create_all)
+        else:
+            await connection.run_sync(
+                lambda sync_connection: Base.metadata.drop_all(
+                    sync_connection,
+                    tables=tables,
+                )
+            )
+            await connection.run_sync(
+                lambda sync_connection: Base.metadata.create_all(
+                    sync_connection,
+                    tables=tables,
+                )
+            )
+    logger.info("Database models recreated")
 
 
 async def dispose_engine(engine: AsyncEngine) -> None:
