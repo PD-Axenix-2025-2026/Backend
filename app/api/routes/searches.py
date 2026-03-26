@@ -1,78 +1,34 @@
+import logging
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, NoReturn
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.api.dependencies import get_search_service
-from app.api.query_parsers import parse_csv_enum_values
+from app.api.dependencies import (
+    get_create_search_use_case,
+    get_search_results_use_case,
+)
+from app.api.searches_mapping import (
+    build_create_search_log_fields,
+    build_results_query,
+    build_results_request_log_fields,
+    build_search_criteria,
+)
 from app.api.serializers import build_search_results_response
-from app.models.enums import TransportType
+from app.core.logging import build_log_extra
 from app.schemas.searches import (
     SearchCreateRequest,
     SearchCreateResponse,
     SearchResultsResponse,
 )
-from app.services.contracts import (
-    PassengerCounts,
-    RouteSearchCriteria,
-    RouteSearchPreferences,
-    SearchResultsQuery,
-    SearchSortOption,
-)
-from app.services.search_service import SearchService, SearchValidationError
-from app.services.search_store import SearchNotFoundError
+from app.services.models import SearchSortOption
+from app.services.search_store_models import SearchNotFoundError
+from app.services.search_validation import SearchValidationError
+from app.services.use_cases import CreateSearchUseCase, GetSearchResultsUseCase
 
 router = APIRouter()
-
-
-def _build_search_criteria(payload: SearchCreateRequest) -> RouteSearchCriteria:
-    return RouteSearchCriteria(
-        origin_id=payload.origin.id,
-        origin_type=payload.origin.type,
-        destination_id=payload.destination.id,
-        destination_type=payload.destination.type,
-        travel_date=payload.date,
-        passengers=PassengerCounts(
-            adults=payload.passengers.adults,
-            children=payload.passengers.children,
-            infants=payload.passengers.infants,
-        ),
-        transport_types=tuple(payload.transport_types),
-        preferences=RouteSearchPreferences(
-            sort=payload.preferences.sort,
-            max_transfers=payload.preferences.max_transfers,
-            max_price=payload.preferences.max_price,
-            max_duration_minutes=payload.preferences.max_duration_minutes,
-        ),
-    )
-
-
-def _build_results_query(
-    *,
-    last_update: int,
-    sort: SearchSortOption | None,
-    max_price: Decimal | None,
-    max_transfers: int | None,
-    max_duration_minutes: int | None,
-    transport_types: str | None,
-    limit: int,
-    offset: int,
-) -> SearchResultsQuery:
-    return SearchResultsQuery(
-        last_update=last_update,
-        sort=sort,
-        max_price=max_price,
-        max_transfers=max_transfers,
-        max_duration_minutes=max_duration_minutes,
-        transport_types=parse_csv_enum_values(
-            transport_types,
-            enum_type=TransportType,
-            parameter_name="transport_types",
-        ),
-        limit=limit,
-        offset=offset,
-    )
+logger = logging.getLogger(__name__)
 
 
 @router.post(
@@ -82,14 +38,24 @@ def _build_results_query(
 )
 async def create_search(
     payload: SearchCreateRequest,
-    service: Annotated[SearchService, Depends(get_search_service)],
+    use_case: Annotated[CreateSearchUseCase, Depends(get_create_search_use_case)],
 ) -> SearchCreateResponse:
-    criteria = _build_search_criteria(payload)
+    criteria = build_search_criteria(payload)
+    logger.info(
+        "Search creation requested %s",
+        build_create_search_log_fields(criteria),
+    )
     try:
-        result = await service.create_search(criteria)
+        result = await use_case.execute(criteria)
     except SearchValidationError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _raise_search_validation_error(exc)
 
+    logger.info(
+        "Search created status=%s poll_after_ms=%s",
+        result.status.value,
+        result.poll_after_ms,
+        extra=build_log_extra(search_id=result.search_id),
+    )
     return SearchCreateResponse(
         search_id=result.search_id,
         status=result.status,
@@ -106,7 +72,10 @@ async def create_search(
 )
 async def get_search_results(
     search_id: UUID,
-    service: Annotated[SearchService, Depends(get_search_service)],
+    use_case: Annotated[
+        GetSearchResultsUseCase,
+        Depends(get_search_results_use_case),
+    ],
     last_update: Annotated[int, Query(ge=0)] = 0,
     sort: SearchSortOption | None = None,
     max_price: Annotated[Decimal | None, Query(ge=0)] = None,
@@ -116,10 +85,24 @@ async def get_search_results(
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> SearchResultsResponse:
+    logger.debug(
+        "Search results requested %s",
+        build_results_request_log_fields(
+            last_update=last_update,
+            sort=sort,
+            max_price=max_price,
+            max_transfers=max_transfers,
+            max_duration_minutes=max_duration_minutes,
+            transport_types=transport_types,
+            limit=limit,
+            offset=offset,
+        ),
+        extra=build_log_extra(search_id=search_id),
+    )
     try:
-        page = await service.get_results(
+        page = await use_case.execute(
             search_id=search_id,
-            query=_build_results_query(
+            query=build_results_query(
                 last_update=last_update,
                 sort=sort,
                 max_price=max_price,
@@ -131,6 +114,30 @@ async def get_search_results(
             ),
         )
     except SearchNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Search not found") from exc
+        _raise_search_not_found(search_id, exc)
 
+    logger.debug(
+        "Search results returned status=%s total_found=%s item_count=%s last_update=%s",
+        page.status.value,
+        page.total_found,
+        len(page.items),
+        page.last_update,
+        extra=build_log_extra(search_id=search_id),
+    )
     return build_search_results_response(page)
+
+
+def _raise_search_validation_error(exc: SearchValidationError) -> NoReturn:
+    logger.warning("Search creation rejected reason=%s", str(exc))
+    raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _raise_search_not_found(
+    search_id: UUID,
+    exc: SearchNotFoundError,
+) -> NoReturn:
+    logger.warning(
+        "Search results requested for unknown search",
+        extra=build_log_extra(search_id=search_id),
+    )
+    raise HTTPException(status_code=404, detail="Search not found") from exc

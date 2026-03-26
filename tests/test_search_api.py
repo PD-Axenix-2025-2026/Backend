@@ -7,31 +7,40 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 
 import pytest
-from app.api.dependencies import get_location_service, get_search_service
+from app.api.dependencies import (
+    get_create_checkout_link_use_case,
+    get_create_search_use_case,
+    get_list_locations_use_case,
+    get_route_detail_use_case,
+    get_search_results_use_case,
+)
 from app.models.enums import LocationType, TransportType
 from app.models.location import Location
-from app.services.contracts import (
-    PassengerCounts,
-    RouteSearchCriteria,
-    RouteSearchPreferences,
-    SearchResultsQuery,
-    SearchSortOption,
-    SearchStatus,
-)
-from app.services.search_service import (
+from app.services.models import (
     CheckoutLinkInfo,
     DecimalRange,
     IntegerRange,
+    MoneySnapshot,
+    PassengerCounts,
     RouteListView,
+    RouteSearchCriteria,
+    RouteSearchPreferences,
+    RouteSegmentSnapshot,
+    RouteSnapshot,
     SearchHandle,
     SearchResultsPage,
+    SearchResultsQuery,
+    SearchSortOption,
+    SearchStatus,
     TransferFacet,
     TransportTypeFacet,
 )
-from app.services.search_store import (
-    MoneySnapshot,
-    RouteSegmentSnapshot,
-    RouteSnapshot,
+from app.services.use_cases import (
+    CreateCheckoutLinkUseCase,
+    CreateSearchUseCase,
+    GetRouteDetailUseCase,
+    GetSearchResultsUseCase,
+    ListLocationsUseCase,
 )
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
@@ -39,12 +48,12 @@ from httpx import ASGITransport, AsyncClient
 MOSCOW_TZ = timezone(timedelta(hours=3))
 
 
-class _FakeLocationService:
+class _FakeListLocationsUseCase:
     def __init__(self, locations: list[Location]) -> None:
         self._locations = locations
         self.calls: list[tuple[str, int, tuple[LocationType, ...]]] = []
 
-    async def list_by_prefix(
+    async def execute(
         self,
         prefix: str,
         limit: int = 10,
@@ -54,14 +63,12 @@ class _FakeLocationService:
         return self._locations[:limit]
 
 
-class _FakeSearchService:
+class _FakeCreateSearchUseCase:
     def __init__(self, route: RouteSnapshot) -> None:
         self._route = route
         self.create_calls: list[RouteSearchCriteria] = []
-        self.result_calls: list[tuple[UUID, SearchResultsQuery]] = []
-        self.checkout_calls: list[tuple[UUID, str | None]] = []
 
-    async def create_search(self, criteria: RouteSearchCriteria) -> SearchHandle:
+    async def execute(self, criteria: RouteSearchCriteria) -> SearchHandle:
         self.create_calls.append(criteria)
         return SearchHandle(
             search_id=self._route.search_id,
@@ -71,7 +78,13 @@ class _FakeSearchService:
             expires_at=datetime(2026, 3, 25, 12, 0, tzinfo=UTC),
         )
 
-    async def get_results(
+
+class _FakeGetSearchResultsUseCase:
+    def __init__(self, route: RouteSnapshot) -> None:
+        self._route = route
+        self.result_calls: list[tuple[UUID, SearchResultsQuery]] = []
+
+    async def execute(
         self,
         search_id: UUID,
         query: SearchResultsQuery,
@@ -100,11 +113,21 @@ class _FakeSearchService:
             items=(RouteListView(route=self._route, labels=("best", "direct")),),
         )
 
-    async def get_route_detail(self, route_id: UUID) -> RouteSnapshot:
+
+class _FakeGetRouteDetailUseCase:
+    def __init__(self, route: RouteSnapshot) -> None:
+        self._route = route
+
+    async def execute(self, route_id: UUID) -> RouteSnapshot:
         assert route_id == self._route.route_id
         return self._route
 
-    async def build_checkout_link(
+
+class _FakeCreateCheckoutLinkUseCase:
+    def __init__(self) -> None:
+        self.checkout_calls: list[tuple[UUID, str | None]] = []
+
+    async def execute(
         self,
         route_id: UUID,
         provider_offer_id: str | None = None,
@@ -120,8 +143,11 @@ class _FakeSearchService:
 @dataclass(slots=True, frozen=True)
 class _SearchApiFixture:
     route: RouteSnapshot
-    location_service: _FakeLocationService
-    search_service: _FakeSearchService
+    list_locations_use_case: _FakeListLocationsUseCase
+    create_search_use_case: _FakeCreateSearchUseCase
+    get_search_results_use_case: _FakeGetSearchResultsUseCase
+    get_route_detail_use_case: _FakeGetRouteDetailUseCase
+    create_checkout_link_use_case: _FakeCreateCheckoutLinkUseCase
 
 
 def _build_location(
@@ -190,7 +216,7 @@ def _build_route() -> RouteSnapshot:
 
 def _build_search_api_fixture() -> _SearchApiFixture:
     route = _build_route()
-    location_service = _FakeLocationService(
+    list_locations_use_case = _FakeListLocationsUseCase(
         locations=[
             _build_location(
                 location_id=uuid4(),
@@ -207,11 +233,17 @@ def _build_search_api_fixture() -> _SearchApiFixture:
             ),
         ]
     )
-    search_service = _FakeSearchService(route=route)
+    create_search_use_case = _FakeCreateSearchUseCase(route=route)
+    get_search_results_use_case = _FakeGetSearchResultsUseCase(route=route)
+    get_route_detail_use_case = _FakeGetRouteDetailUseCase(route=route)
+    create_checkout_link_use_case = _FakeCreateCheckoutLinkUseCase()
     return _SearchApiFixture(
         route=route,
-        location_service=location_service,
-        search_service=search_service,
+        list_locations_use_case=list_locations_use_case,
+        create_search_use_case=create_search_use_case,
+        get_search_results_use_case=get_search_results_use_case,
+        get_route_detail_use_case=get_route_detail_use_case,
+        create_checkout_link_use_case=create_checkout_link_use_case,
     )
 
 
@@ -219,14 +251,36 @@ def _build_search_api_fixture() -> _SearchApiFixture:
 def search_api_fixture(app: FastAPI) -> Generator[_SearchApiFixture, None, None]:
     fixture = _build_search_api_fixture()
 
-    async def _get_fake_location_service() -> _FakeLocationService:
-        return fixture.location_service
+    async def _get_fake_list_locations_use_case() -> ListLocationsUseCase:
+        return fixture.list_locations_use_case  # type: ignore[return-value]
 
-    async def _get_fake_search_service() -> _FakeSearchService:
-        return fixture.search_service
+    async def _get_fake_create_search_use_case() -> CreateSearchUseCase:
+        return fixture.create_search_use_case  # type: ignore[return-value]
 
-    app.dependency_overrides[get_location_service] = _get_fake_location_service
-    app.dependency_overrides[get_search_service] = _get_fake_search_service
+    async def _get_fake_search_results_use_case() -> GetSearchResultsUseCase:
+        return fixture.get_search_results_use_case  # type: ignore[return-value]
+
+    async def _get_fake_route_detail_use_case() -> GetRouteDetailUseCase:
+        return fixture.get_route_detail_use_case  # type: ignore[return-value]
+
+    async def _get_fake_checkout_link_use_case() -> CreateCheckoutLinkUseCase:
+        return fixture.create_checkout_link_use_case  # type: ignore[return-value]
+
+    app.dependency_overrides[get_list_locations_use_case] = (
+        _get_fake_list_locations_use_case
+    )
+    app.dependency_overrides[get_create_search_use_case] = (
+        _get_fake_create_search_use_case
+    )
+    app.dependency_overrides[get_search_results_use_case] = (
+        _get_fake_search_results_use_case
+    )
+    app.dependency_overrides[get_route_detail_use_case] = (
+        _get_fake_route_detail_use_case
+    )
+    app.dependency_overrides[get_create_checkout_link_use_case] = (
+        _get_fake_checkout_link_use_case
+    )
 
     try:
         yield fixture
@@ -249,7 +303,7 @@ async def test_locations_endpoint_serializes_autocomplete_items(
 
     assert response.status_code == 200
     assert response.json()["items"][0]["label"] == "Moscow"
-    assert search_api_fixture.location_service.calls == [
+    assert search_api_fixture.list_locations_use_case.calls == [
         ("Mo", 5, (LocationType.city, LocationType.airport))
     ]
 
@@ -294,7 +348,8 @@ async def test_search_flow_endpoints_serialize_contract(
 
     assert create_response.status_code == 201
     assert create_response.json()["search_id"] == str(route.search_id)
-    assert search_api_fixture.search_service.create_calls[0] == RouteSearchCriteria(
+    assert search_api_fixture.create_search_use_case.create_calls[0] == (
+        RouteSearchCriteria(
         origin_id=route.segments[0].origin_id,
         origin_type=LocationType.city,
         destination_id=route.segments[0].destination_id,
@@ -307,16 +362,23 @@ async def test_search_flow_endpoints_serialize_contract(
             max_transfers=1,
         ),
     )
+    )
 
     assert results_response.status_code == 200
     assert results_response.json()["items"][0]["route_id"] == str(route.route_id)
-    assert search_api_fixture.search_service.result_calls[0][0] == route.search_id
-    assert search_api_fixture.search_service.result_calls[0][1] == SearchResultsQuery(
+    assert (
+        search_api_fixture.get_search_results_use_case.result_calls[0][0]
+        == route.search_id
+    )
+    assert (
+        search_api_fixture.get_search_results_use_case.result_calls[0][1]
+        == SearchResultsQuery(
         last_update=0,
         sort=SearchSortOption.price,
         transport_types=(TransportType.plane,),
         limit=5,
         offset=0,
+    )
     )
 
     assert detail_response.status_code == 200
@@ -324,6 +386,6 @@ async def test_search_flow_endpoints_serialize_contract(
 
     assert checkout_response.status_code == 200
     assert checkout_response.json()["method"] == "GET"
-    assert search_api_fixture.search_service.checkout_calls == [
+    assert search_api_fixture.create_checkout_link_use_case.checkout_calls == [
         (route.route_id, "offer-1")
     ]

@@ -18,17 +18,15 @@ from app.schemas.searches import (
     TransferFacetResponse,
     TransportTypeFacetResponse,
 )
-from app.services.search_service import (
+from app.services.models import (
     DecimalRange,
+    MoneySnapshot,
     RouteListView,
+    RouteSegmentSnapshot,
+    RouteSnapshot,
     SearchResultsPage,
     TransferFacet,
     TransportTypeFacet,
-)
-from app.services.search_store import (
-    MoneySnapshot,
-    RouteSegmentSnapshot,
-    RouteSnapshot,
 )
 
 

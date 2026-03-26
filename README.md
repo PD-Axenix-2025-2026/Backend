@@ -71,6 +71,7 @@ tests/           smoke-тесты wiring и служебных endpoint-ов
    ```
 
 4. При необходимости изменить значения в `.env`. Вне Docker по умолчанию используется локальный файл SQLite `pdaxenix.db`, а `PDAXENIX_REDIS_URL` можно оставить пустым: Redis для обычного локального запуска не требуется. Для Docker Compose подключения к PostgreSQL и Redis переопределяются в `docker-compose.yml`.
+   Для управления уровнем логирования можно использовать `PDAXENIX_LOG_LEVEL`, например `INFO` или `DEBUG`.
 
 5. Запустить приложение:
 
@@ -88,6 +89,17 @@ tests/           smoke-тесты wiring и служебных endpoint-ов
 - Проверка форматирования: `poetry run ruff format --check app tests`
 - Линтинг: `poetry run ruff check app tests`
 - Проверка типов: `poetry run mypy app tests`
+
+## Логирование
+
+Приложение пишет plain-text логи через стандартный `logging` и автоматически добавляет в них:
+
+- `request_id`
+- `search_id`
+- `route_id`
+
+Для HTTP-запросов backend принимает входящий заголовок `X-Request-ID` или генерирует его сам и возвращает обратно в ответе.
+Уровень логирования настраивается через `PDAXENIX_LOG_LEVEL`.
 
 ## CI
 

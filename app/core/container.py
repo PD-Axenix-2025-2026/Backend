@@ -1,16 +1,26 @@
+import logging
 from dataclasses import dataclass, field
 
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from app.adapters.database_route_search import DatabaseRouteSearchAdapter
+from app.adapters.sqlalchemy_locations import SqlAlchemyLocationReadAdapter
+from app.adapters.sqlalchemy_route_segments import SqlAlchemyRouteSegmentReadAdapter
 from app.core.config import Settings
-from app.providers.database import DatabaseRouteProvider
-from app.repositories.location_repository import LocationRepository
-from app.repositories.route_segment_repository import RouteSegmentRepository
-from app.services.location_service import LocationService
-from app.services.route_aggregation import RouteAggregationService
-from app.services.search_service import SearchService
+from app.services.runtime import SearchRuntimeCoordinator
 from app.services.search_store import InMemorySearchStore
+from app.services.search_validation import SearchCriteriaValidator
+from app.services.use_cases import (
+    CreateCheckoutLinkUseCase,
+    CreateSearchUseCase,
+    GetRouteDetailUseCase,
+    GetSearchResultsUseCase,
+    ListLocationsUseCase,
+    RunSearchUseCase,
+)
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -20,39 +30,53 @@ class AppContainer:
     session_factory: async_sessionmaker[AsyncSession]
     redis_client: Redis | None = None
     search_store: InMemorySearchStore = field(default_factory=InMemorySearchStore)
-    search_service: SearchService = field(init=False)
+    location_reader: SqlAlchemyLocationReadAdapter = field(init=False)
+    route_segment_reader: SqlAlchemyRouteSegmentReadAdapter = field(init=False)
+    route_search: DatabaseRouteSearchAdapter = field(init=False)
+    list_locations_use_case: ListLocationsUseCase = field(init=False)
+    create_search_use_case: CreateSearchUseCase = field(init=False)
+    get_search_results_use_case: GetSearchResultsUseCase = field(init=False)
+    get_route_detail_use_case: GetRouteDetailUseCase = field(init=False)
+    create_checkout_link_use_case: CreateCheckoutLinkUseCase = field(init=False)
+    search_runtime_coordinator: SearchRuntimeCoordinator = field(init=False)
 
     def __post_init__(self) -> None:
-        self.search_service = SearchService(
+        logger.debug("Initializing application container")
+        self.location_reader = SqlAlchemyLocationReadAdapter(self.session_factory)
+        self.route_segment_reader = SqlAlchemyRouteSegmentReadAdapter(
+            self.session_factory
+        )
+        self.route_search = DatabaseRouteSearchAdapter(self.session_factory)
+        validator = SearchCriteriaValidator(location_reader=self.location_reader)
+        run_search_use_case = RunSearchUseCase(
+            route_search_port=self.route_search,
+            route_segment_reader=self.route_segment_reader,
+            search_state_store=self.search_store,
+        )
+        self.search_runtime_coordinator = SearchRuntimeCoordinator(
+            run_search_use_case=run_search_use_case,
+            search_state_store=self.search_store,
+        )
+        self.list_locations_use_case = ListLocationsUseCase(
+            location_reader=self.location_reader,
+        )
+        self.create_search_use_case = CreateSearchUseCase(
             settings=self.settings,
-            session_factory=self.session_factory,
-            search_store=self.search_store,
-            location_repository_factory=self.build_location_repository,
-            route_segment_repository_factory=self.build_route_segment_repository,
-            route_aggregation_factory=self.build_route_aggregation_service,
+            validator=validator,
+            search_state_store=self.search_store,
+            runtime_coordinator=self.search_runtime_coordinator,
         )
-
-    def build_location_repository(self, session: AsyncSession) -> LocationRepository:
-        return LocationRepository(session)
-
-    def build_route_segment_repository(
-        self,
-        session: AsyncSession,
-    ) -> RouteSegmentRepository:
-        return RouteSegmentRepository(session)
-
-    def build_location_service(self, session: AsyncSession) -> LocationService:
-        return LocationService(
-            location_repository=self.build_location_repository(session),
+        self.get_search_results_use_case = GetSearchResultsUseCase(
+            search_state_store=self.search_store,
         )
-
-    def build_route_aggregation_service(
-        self,
-        session: AsyncSession,
-    ) -> RouteAggregationService:
-        repository = self.build_route_segment_repository(session)
-        provider = DatabaseRouteProvider(repository=repository)
-        return RouteAggregationService(providers=[provider])
+        self.get_route_detail_use_case = GetRouteDetailUseCase(
+            search_state_store=self.search_store,
+        )
+        self.create_checkout_link_use_case = CreateCheckoutLinkUseCase(
+            settings=self.settings,
+            search_state_store=self.search_store,
+        )
 
     async def shutdown(self) -> None:
-        await self.search_service.shutdown()
+        logger.info("Shutting down application container")
+        await self.search_runtime_coordinator.shutdown()

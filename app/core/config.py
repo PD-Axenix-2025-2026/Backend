@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     app_name: str = "Аналитический сервис логистики путешествия"
     app_env: str = "dev"
     debug: bool = False
+    log_level: str | None = None
     api_prefix: str = "/api"
     database_url: str = Field(
         default="sqlite+aiosqlite:///./pdaxenix.db",

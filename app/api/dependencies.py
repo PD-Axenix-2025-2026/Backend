@@ -1,41 +1,46 @@
-from collections.abc import AsyncIterator
 from typing import Annotated, cast
 
 from fastapi import Depends, Request
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.container import AppContainer
-from app.services.location_service import LocationService
-from app.services.route_aggregation import RouteAggregationService
-from app.services.search_service import SearchService
+from app.services.use_cases import (
+    CreateCheckoutLinkUseCase,
+    CreateSearchUseCase,
+    GetRouteDetailUseCase,
+    GetSearchResultsUseCase,
+    ListLocationsUseCase,
+)
 
 
 def get_container(request: Request) -> AppContainer:
     return cast(AppContainer, request.app.state.container)
 
 
-async def get_db_session(
+def get_list_locations_use_case(
     container: Annotated[AppContainer, Depends(get_container)],
-) -> AsyncIterator[AsyncSession]:
-    async with container.session_factory() as session:
-        yield session
+) -> ListLocationsUseCase:
+    return container.list_locations_use_case
 
 
-def get_route_aggregation_service(
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+def get_create_search_use_case(
     container: Annotated[AppContainer, Depends(get_container)],
-) -> RouteAggregationService:
-    return container.build_route_aggregation_service(session)
+) -> CreateSearchUseCase:
+    return container.create_search_use_case
 
 
-def get_location_service(
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+def get_search_results_use_case(
     container: Annotated[AppContainer, Depends(get_container)],
-) -> LocationService:
-    return container.build_location_service(session)
+) -> GetSearchResultsUseCase:
+    return container.get_search_results_use_case
 
 
-def get_search_service(
+def get_route_detail_use_case(
     container: Annotated[AppContainer, Depends(get_container)],
-) -> SearchService:
-    return container.search_service
+) -> GetRouteDetailUseCase:
+    return container.get_route_detail_use_case
+
+
+def get_create_checkout_link_use_case(
+    container: Annotated[AppContainer, Depends(get_container)],
+) -> CreateCheckoutLinkUseCase:
+    return container.create_checkout_link_use_case

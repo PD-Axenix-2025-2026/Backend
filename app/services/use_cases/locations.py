@@ -2,16 +2,16 @@ import logging
 
 from app.models.enums import LocationType
 from app.models.location import Location
-from app.repositories.location_repository import LocationRepository
+from app.services.ports import LocationReadPort
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("app.services.location_service")
 
 
-class LocationService:
-    def __init__(self, location_repository: LocationRepository) -> None:
-        self._location_repository = location_repository
+class ListLocationsUseCase:
+    def __init__(self, location_reader: LocationReadPort) -> None:
+        self._location_reader = location_reader
 
-    async def list_by_prefix(
+    async def execute(
         self,
         prefix: str,
         limit: int = 10,
@@ -23,7 +23,7 @@ class LocationService:
             limit,
             [location_type.value for location_type in location_types] or ["all"],
         )
-        locations = await self._location_repository.list_by_prefix(
+        locations = await self._location_reader.list_by_prefix(
             prefix=prefix,
             limit=limit,
             location_types=location_types,
