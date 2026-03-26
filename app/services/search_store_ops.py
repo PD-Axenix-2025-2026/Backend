@@ -37,9 +37,7 @@ def cleanup_expired_searches(
     route_index: dict[UUID, UUID],
 ) -> tuple[UUID, ...]:
     expired_search_ids = tuple(
-        search_id
-        for search_id, record in searches.items()
-        if is_expired(record)
+        search_id for search_id, record in searches.items() if is_expired(record)
     )
     for search_id in expired_search_ids:
         remove_search(searches, route_index, search_id=search_id)

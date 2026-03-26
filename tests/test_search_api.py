@@ -350,18 +350,18 @@ async def test_search_flow_endpoints_serialize_contract(
     assert create_response.json()["search_id"] == str(route.search_id)
     assert search_api_fixture.create_search_use_case.create_calls[0] == (
         RouteSearchCriteria(
-        origin_id=route.segments[0].origin_id,
-        origin_type=LocationType.city,
-        destination_id=route.segments[0].destination_id,
-        destination_type=LocationType.city,
-        travel_date=datetime(2026, 4, 14).date(),
-        passengers=PassengerCounts(adults=2, children=0, infants=0),
-        transport_types=(TransportType.plane, TransportType.train),
-        preferences=RouteSearchPreferences(
-            sort=SearchSortOption.best,
-            max_transfers=1,
-        ),
-    )
+            origin_id=route.segments[0].origin_id,
+            origin_type=LocationType.city,
+            destination_id=route.segments[0].destination_id,
+            destination_type=LocationType.city,
+            travel_date=datetime(2026, 4, 14).date(),
+            passengers=PassengerCounts(adults=2, children=0, infants=0),
+            transport_types=(TransportType.plane, TransportType.train),
+            preferences=RouteSearchPreferences(
+                sort=SearchSortOption.best,
+                max_transfers=1,
+            ),
+        )
     )
 
     assert results_response.status_code == 200
@@ -370,15 +370,14 @@ async def test_search_flow_endpoints_serialize_contract(
         search_api_fixture.get_search_results_use_case.result_calls[0][0]
         == route.search_id
     )
-    assert (
-        search_api_fixture.get_search_results_use_case.result_calls[0][1]
-        == SearchResultsQuery(
+    assert search_api_fixture.get_search_results_use_case.result_calls[0][
+        1
+    ] == SearchResultsQuery(
         last_update=0,
         sort=SearchSortOption.price,
         transport_types=(TransportType.plane,),
         limit=5,
         offset=0,
-    )
     )
 
     assert detail_response.status_code == 200

@@ -39,6 +39,7 @@ from app.services.use_cases import (
 
 MOSCOW_TZ = timezone(timedelta(hours=3))
 
+
 class FakeLocationReader(LocationReadPort):
     def __init__(self, locations: dict[UUID, Location]) -> None:
         self._locations = locations
