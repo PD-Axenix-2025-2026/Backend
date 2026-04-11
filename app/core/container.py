@@ -1,12 +1,15 @@
 import logging
 from dataclasses import dataclass, field
+from uuid import UUID
 
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.adapters.database_route_search import DatabaseRouteSearchAdapter
+from app.adapters.rzd_route_search import RzdRouteSearchAdapter
 from app.adapters.sqlalchemy_locations import SqlAlchemyLocationReadAdapter
 from app.adapters.sqlalchemy_route_segments import SqlAlchemyRouteSegmentReadAdapter
+from app.clients.rzd_client_factory import RzdConfig, RzdHttpClientFactory
 from app.core.config import Settings
 from app.services.runtime import SearchRuntimeCoordinator
 from app.services.search_store import InMemorySearchStore
@@ -28,11 +31,15 @@ class AppContainer:
     settings: Settings
     engine: AsyncEngine
     session_factory: async_sessionmaker[AsyncSession]
+    rzd_http_client_factory: RzdHttpClientFactory
     redis_client: Redis | None = None
+    rzd_config: RzdConfig = field(default_factory=RzdConfig)
+    station_code_mapping: dict[UUID, str] = field(default_factory=dict)
     search_store: InMemorySearchStore = field(default_factory=InMemorySearchStore)
     location_reader: SqlAlchemyLocationReadAdapter = field(init=False)
     route_segment_reader: SqlAlchemyRouteSegmentReadAdapter = field(init=False)
-    route_search: DatabaseRouteSearchAdapter = field(init=False)
+    # route_search: DatabaseRouteSearchAdapter = field(init=False)
+    route_search: RzdRouteSearchAdapter = field(init=False)
     list_locations_use_case: ListLocationsUseCase = field(init=False)
     create_search_use_case: CreateSearchUseCase = field(init=False)
     get_search_results_use_case: GetSearchResultsUseCase = field(init=False)
@@ -46,7 +53,14 @@ class AppContainer:
         self.route_segment_reader = SqlAlchemyRouteSegmentReadAdapter(
             self.session_factory
         )
-        self.route_search = DatabaseRouteSearchAdapter(self.session_factory)
+        # self.route_search = DatabaseRouteSearchAdapter(self.session_factory)
+
+        self.route_search = RzdRouteSearchAdapter(
+            station_code_mapping=self.station_code_mapping,
+            http_client_factory=self.rzd_http_client_factory,
+            config=self.rzd_config,
+        )
+
         validator = SearchCriteriaValidator(location_reader=self.location_reader)
         run_search_use_case = RunSearchUseCase(
             route_search_port=self.route_search,
