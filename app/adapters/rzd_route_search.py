@@ -11,6 +11,21 @@ from app.utils.time_utils import timespan_to_minutes
 
 logger = logging.getLogger(__name__)
 
+class RZDApiError(Exception):
+    """Базовое исключение для ошибок API РЖД"""
+    pass
+
+class RZDRequestError(RZDApiError):
+    """Ошибка при выполнении запроса"""
+    pass
+
+class RZDResponseError(RZDApiError):
+    """Ошибка в ответе API"""
+    pass
+
+class RZDTimeoutError(RZDApiError):
+    """Таймаут при ожидании данных"""
+    pass
 
 class RzdRouteSearchAdapter:
     """Адаптер для поиска маршрутов через API РЖД"""
@@ -56,7 +71,7 @@ class RzdRouteSearchAdapter:
         """
         return self.station_code_mapping.get(station_id)
 
-    async def _fetch_routes(self, params: dict[str, Any]) -> Any | None:
+    async def _fetch_routes(self, params: dict[str, Any]) -> Any:
         """
         Выполнение запроса к API РЖД для получения маршрутов
 
@@ -64,7 +79,12 @@ class RzdRouteSearchAdapter:
             params: Параметры запроса
 
         Returns:
-            Ответ API в виде словаря или None при ошибке
+            Ответ API в виде словаря
+
+        Raises:
+            RZDRequestError: При ошибках HTTP запроса
+            RZDResponseError: При ошибках в ответе API
+            RZDTimeoutError: При превышении попыток получения данных по RID
         """
         session = await self._get_session()
         url = f"{self.BASE_URL}/{self.config.language}"
@@ -86,7 +106,7 @@ class RzdRouteSearchAdapter:
             while result in ["RID", "REQUEST_ID"] and rid_attempts < max_rid_attempts:
                 rid = data.get("rid") or data.get("RID")
                 if not rid:
-                    raise ValueError("RID not found in response")
+                    raise RZDResponseError("RID not found in response")
 
                 logger.debug(f"Got RID: {rid}, waiting for data...")
                 params = {"rid": rid, "layer_id": str(self.ROUTES_LAYER)}
@@ -99,23 +119,32 @@ class RzdRouteSearchAdapter:
                 result = data.get("result", "OK")
                 rid_attempts += 1
 
+            if rid_attempts >= max_rid_attempts:
+                raise RZDTimeoutError(
+                    f"Failed to get data after {max_rid_attempts} attempts"
+                )
+
             if result != "OK":
                 error_msg = (
                     data.get("tp", [{}])[0]
                     .get("msgList", [{}])[0]
                     .get("message", "Failed to get request data")
                 )
-                logger.error(f"RZD API error: {error_msg}")
-                return None
+                raise RZDResponseError(f"RZD API error: {error_msg}")
 
             return data
 
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP status error: {e.response.status_code} - {e.response.text}")
+            raise RZDRequestError(f"HTTP {e.response.status_code}: Failed to fetch routes") from e
         except httpx.HTTPError as e:
             logger.error(f"HTTP error while fetching routes: {e}")
-            return None
+            raise RZDRequestError("Network error while fetching routes") from e
+        except RZDApiError:
+            raise
         except Exception as e:
             logger.error(f"Unexpected error: {e}")
-            return None
+            raise RZDApiError(f"Unexpected error: {e}") from e
 
     async def search(self, criteria: RouteSearchCriteria) -> list[RouteCandidate]:
         """
