@@ -109,16 +109,21 @@ class RzdRouteSearchAdapter:
         try:
             logger.debug(f"Requesting RZD API: {url} with params: {params}")
 
-            response = await session.post(url, data=params)
+            response: httpx.Response = await session.post(url, data=params)
             response.raise_for_status()
 
             data = response.json()
 
             result = data.get("result", "OK")
-            rid_attempts = 0
-            max_rid_attempts = 10
+            # экспериментально подтверждено, что ответ обычно доходит дольше секунды
+            delay = 1.0
+            data_request_attempts = 0
+            last_attempt = False
 
-            while result in ["RID", "REQUEST_ID"] and rid_attempts < max_rid_attempts:
+            while result in ["RID", "REQUEST_ID"] and not last_attempt:
+                if delay == self.config.timeout:
+                    last_attempt = True
+
                 rid = data.get("rid") or data.get("RID")
                 if not rid:
                     raise RZDResponseError("RID not found in response")
@@ -126,17 +131,18 @@ class RzdRouteSearchAdapter:
                 logger.debug(f"Got RID: {rid}, waiting for data...")
                 params = {"rid": rid, "layer_id": str(self.ROUTES_LAYER)}
 
-                await asyncio.sleep(1)
+                await asyncio.sleep(delay)
+                delay = min(delay * 1.5, self.config.timeout)
 
                 response = await session.post(url, data=params)
                 response.raise_for_status()
                 data = response.json()
                 result = data.get("result", "OK")
-                rid_attempts += 1
+                data_request_attempts += 1
 
-            if rid_attempts >= max_rid_attempts:
+            if result in ["RID", "REQUEST_ID"]:
                 raise RZDTimeoutError(
-                    f"Failed to get data after {max_rid_attempts} attempts"
+                    f"Failed to get data after {data_request_attempts} attempts"
                 )
 
             if result != "OK":
@@ -146,6 +152,11 @@ class RzdRouteSearchAdapter:
                     .get("message", "Failed to get request data")
                 )
                 raise RZDResponseError(f"RZD API error: {error_msg}")
+
+            logger.debug(
+                "RZD API client used %s attempts to get data",
+                data_request_attempts,
+            )
 
             return data
 
