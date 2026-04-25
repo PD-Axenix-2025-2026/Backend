@@ -1,5 +1,4 @@
 from functools import lru_cache
-from uuid import UUID
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -32,12 +31,6 @@ class Settings(BaseSettings):
     )
     rzd_referer: str | None = "https://ticket.rzd.ru/"
     rzd_proxy: str | None = None
-    rzd_station_mapping: dict[str, str] = Field(
-        default_factory=lambda: {
-            "fbdba9a4-b76e-50ea-9b62-5f7661766ac2": "2004000",
-            "8b3993dd-e50f-58c7-a564-1e1f100c847a": "2000000",
-        }
-    )
 
     model_config = SettingsConfigDict(
         env_prefix="PDAXENIX_",
@@ -60,7 +53,3 @@ def build_rzd_config(settings: Settings) -> RzdConfig:
         referer=settings.rzd_referer,
         proxy=settings.rzd_proxy,
     )
-
-
-def build_rzd_station_mapping(settings: Settings) -> dict[UUID, str]:
-    return {UUID(key): value for key, value in settings.rzd_station_mapping.items()}

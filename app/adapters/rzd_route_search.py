@@ -6,12 +6,14 @@ from decimal import Decimal
 from typing import Any
 
 import httpx
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.clients.rzd_client_factory import RzdConfig, RzdHttpClientFactory
 from app.models.carrier import Carrier
 from app.models.enums import TransportType
 from app.models.location import Location
 from app.models.route_segment import RouteSegment
+from app.repositories.location_repository import LocationRepository
 from app.services.models import RouteCandidate, RouteSearchCriteria
 from app.utils.time_utils import timespan_to_minutes
 
@@ -46,45 +48,48 @@ class RzdRouteSearchAdapter:
     """Адаптер для поиска маршрутов через API РЖД"""
 
     BASE_URL = "https://pass.rzd.ru/timetable/public"
-    SUGGESTION_URL = "https://pass.rzd.ru/suggester"
-    STATION_LIST_URL = "https://pass.rzd.ru/ticket/services/route/basicRoute"
 
     ROUTES_LAYER = 5827
     CARRIAGES_LAYER = 5764
-    STATIONS_STRUCTURE_ID = 704
 
     def __init__(
         self,
-        station_code_mapping: dict[uuid.UUID, str],
         http_client_factory: RzdHttpClientFactory,
+        database_session_factory: async_sessionmaker[AsyncSession],
         config: RzdConfig | None = None,
     ):
         """
         Инициализация адаптера
 
         Args:
-            config: Конфигурация API РЖД
-            station_code_mapping: Словарь для маппинга station_id -> код станции РЖД
             http_client_factory: Фабрика для создания AsyncClient
+            database_session_factory: Фабрика для создания БД-сессии
+            config: Конфигурация API РЖД
         """
         self.config = config or RzdConfig()
-        self.station_code_mapping = station_code_mapping
         self._http_client_factory = http_client_factory
+        self._database_session_factory = database_session_factory
 
     async def _get_session(self) -> httpx.AsyncClient:
         return await self._http_client_factory.get()
 
-    async def _get_station_code(self, station_id: uuid.UUID) -> str | None:
+    async def _get_station_code(self, location_id: uuid.UUID) -> str | None:
         """
-        Получение кода станции РЖД по ID из БД
+        Получение кода локации РЖД по ID из БД
 
         Args:
-            station_id: ID станции
+            location_id: ID локации
 
         Returns:
-            Код станции для API РЖД или None
+            Код локации для API РЖД или None
         """
-        return self.station_code_mapping.get(station_id)
+        async with self._database_session_factory() as session:
+            repository = LocationRepository(session)
+            loc = await repository.get_by_id(location_id)
+            if loc:
+                return loc.code
+
+            return None
 
     async def _fetch_routes(self, params: dict[str, Any]) -> Any:
         """
@@ -198,7 +203,6 @@ class RzdRouteSearchAdapter:
             criteria.travel_date,
         )
 
-        # Получаем коды станций для API РЖД
         origin_code = await self._get_station_code(criteria.origin_id)
         destination_code = await self._get_station_code(criteria.destination_id)
 

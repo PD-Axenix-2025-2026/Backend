@@ -1,6 +1,5 @@
 import logging
 from dataclasses import dataclass, field
-from uuid import UUID
 
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
@@ -34,7 +33,6 @@ class AppContainer:
     rzd_http_client_factory: RzdHttpClientFactory
     redis_client: Redis | None = None
     rzd_config: RzdConfig = field(default_factory=RzdConfig)
-    station_code_mapping: dict[UUID, str] = field(default_factory=dict)
     search_store: InMemorySearchStore = field(default_factory=InMemorySearchStore)
     location_reader: SqlAlchemyLocationReadAdapter = field(init=False)
     route_segment_reader: SqlAlchemyRouteSegmentReadAdapter = field(init=False)
@@ -56,8 +54,8 @@ class AppContainer:
         # self.route_search = DatabaseRouteSearchAdapter(self.session_factory)
 
         self.route_search = RzdRouteSearchAdapter(
-            station_code_mapping=self.station_code_mapping,
             http_client_factory=self.rzd_http_client_factory,
+            database_session_factory=self.session_factory,
             config=self.rzd_config,
         )
 

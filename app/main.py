@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from app.api.middleware import register_request_logging_middleware
 from app.api.router import api_router
 from app.clients.rzd_client_factory import RzdHttpClientFactory
-from app.core.config import build_rzd_config, build_rzd_station_mapping, get_settings
+from app.core.config import build_rzd_config, get_settings
 from app.core.container import AppContainer
 from app.core.database import (
     build_engine,
@@ -35,7 +35,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     redis_client = build_redis_client(settings)
 
     rzd_config = build_rzd_config(settings)
-    station_mapping = build_rzd_station_mapping(settings)
 
     rzd_http_client_factory = RzdHttpClientFactory(rzd_config)
 
@@ -46,7 +45,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         redis_client=redis_client,
         rzd_http_client_factory=rzd_http_client_factory,
         rzd_config=rzd_config,
-        station_code_mapping=station_mapping,
     )
 
     app.state.container = container
