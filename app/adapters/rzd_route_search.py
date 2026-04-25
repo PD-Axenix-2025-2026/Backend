@@ -176,12 +176,12 @@ class RzdRouteSearchAdapter:
             Список найденных маршрутов
         """
         logger.debug(
-            '''
+            """
                     RZD API route search started 
                     origin_id=%s 
                     destination_id=%s 
                     travel_date=%s
-                 ''',
+                 """,
             criteria.origin_id,
             criteria.destination_id,
             criteria.travel_date,
