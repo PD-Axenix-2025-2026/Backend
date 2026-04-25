@@ -5,7 +5,7 @@ from uuid import UUID
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from app.adapters.database_route_search import DatabaseRouteSearchAdapter
+# from app.adapters.database_route_search import DatabaseRouteSearchAdapter
 from app.adapters.rzd_route_search import RzdRouteSearchAdapter
 from app.adapters.sqlalchemy_locations import SqlAlchemyLocationReadAdapter
 from app.adapters.sqlalchemy_route_segments import SqlAlchemyRouteSegmentReadAdapter

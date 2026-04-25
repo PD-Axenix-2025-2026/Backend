@@ -20,6 +20,8 @@ def resolve_candidate_segments(
     *,
     segments_by_id: dict[UUID, RouteSegment],
 ) -> list[RouteSegment] | None:
+    if candidate.resolved_segments:
+        return list(candidate.resolved_segments)
     resolved_segments = [
         segments_by_id.get(segment_id) for segment_id in candidate.segment_ids
     ]

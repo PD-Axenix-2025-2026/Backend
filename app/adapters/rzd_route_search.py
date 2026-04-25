@@ -1,31 +1,46 @@
 import asyncio
 import logging
 import uuid
+from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 import httpx
 
 from app.clients.rzd_client_factory import RzdConfig, RzdHttpClientFactory
+from app.models.carrier import Carrier
+from app.models.enums import TransportType
+from app.models.location import Location
+from app.models.route_segment import RouteSegment
 from app.services.models import RouteCandidate, RouteSearchCriteria
 from app.utils.time_utils import timespan_to_minutes
 
 logger = logging.getLogger(__name__)
 
+
 class RZDApiError(Exception):
     """Базовое исключение для ошибок API РЖД"""
+
     pass
+
 
 class RZDRequestError(RZDApiError):
     """Ошибка при выполнении запроса"""
+
     pass
+
 
 class RZDResponseError(RZDApiError):
     """Ошибка в ответе API"""
+
     pass
 
+
 class RZDTimeoutError(RZDApiError):
-    """Таймаут при ожидании данных"""
+    """Тайм-аут при ожидании данных"""
+
     pass
+
 
 class RzdRouteSearchAdapter:
     """Адаптер для поиска маршрутов через API РЖД"""
@@ -135,8 +150,12 @@ class RzdRouteSearchAdapter:
             return data
 
         except httpx.HTTPStatusError as e:
-            logger.error(f"HTTP status error: {e.response.status_code} - {e.response.text}")
-            raise RZDRequestError(f"HTTP {e.response.status_code}: Failed to fetch routes") from e
+            logger.error(
+                f"HTTP status error: {e.response.status_code} - {e.response.text}"
+            )
+            raise RZDRequestError(
+                f"HTTP {e.response.status_code}: Failed to fetch routes"
+            ) from e
         except httpx.HTTPError as e:
             logger.error(f"HTTP error while fetching routes: {e}")
             raise RZDRequestError("Network error while fetching routes") from e
@@ -157,7 +176,12 @@ class RzdRouteSearchAdapter:
             Список найденных маршрутов
         """
         logger.debug(
-            "RZD API route search started origin_id=%s destination_id=%s travel_date=%s",
+            '''
+                    RZD API route search started 
+                    origin_id=%s 
+                    destination_id=%s 
+                    travel_date=%s
+                 ''',
             criteria.origin_id,
             criteria.destination_id,
             criteria.travel_date,
@@ -226,20 +250,46 @@ class RzdRouteSearchAdapter:
         routes_list = tp_data[0].get("list", [])
 
         for route_data in routes_list:
+            segment = RouteSegment(
+                id=uuid.uuid4(),
+                transport_type=TransportType.train,
+                carrier=Carrier(name=route_data.get("carrier"), code=None),
+                segment_code=None,
+                origin_location=Location(
+                    id=uuid.uuid4(), name=route_data.get("station0"), code=None
+                ),
+                destination_location=Location(
+                    id=uuid.uuid4(), name=route_data.get("station1"), code=None
+                ),
+                departure_at=datetime.strptime(
+                    f"{route_data.get('date0')} {route_data.get('time0')}",
+                    "%d.%m.%Y %H:%M",
+                ),
+                arrival_at=datetime.strptime(
+                    f"{route_data.get('date1')} {route_data.get('time1')}",
+                    "%d.%m.%Y %H:%M",
+                ),
+                duration_minutes=timespan_to_minutes(route_data.get("timeInWay")),
+                price_amount=Decimal(route_data.get("cars", [{}])[0].get("tariff")),
+                currency_code="RUB",
+                available_seats=route_data.get("cars", [{}])[0].get("freeSeats"),
+                source_system="rzd_api",
+                source_record_id=None,
+                valid_from=datetime.now(),
+                valid_to=None,
+            )
+
             try:
                 route_candidate = RouteCandidate(
                     source="rzd_api",
-                    segment_ids=(uuid.UUID(int=int(route_data.get("train_id"))),),
-                    total_price=route_data.get("seatCars", [{}])[0].get("tariff"),
+                    segment_ids=(segment.id,),
+                    total_price=route_data.get("cars", [{}])[0].get("tariff"),
                     total_duration_minutes=timespan_to_minutes(
                         route_data.get("timeInWay")
                     ),
                     transfers=0,
+                    resolved_segments=(segment,),
                 )
-
-                # Добавляем информацию о вагонах если есть
-                # if "cars" in route_data:
-                #     route_candidate.carriages = self._parse_carriages(route_data["cars"])
 
                 routes.append(route_candidate)
 
