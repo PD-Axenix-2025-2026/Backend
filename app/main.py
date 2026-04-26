@@ -6,7 +6,8 @@ from fastapi import FastAPI
 
 from app.api.middleware import register_request_logging_middleware
 from app.api.router import api_router
-from app.core.config import get_settings
+from app.clients.rzd_client_factory import RzdHttpClientFactory
+from app.core.config import build_rzd_config, get_settings
 from app.core.container import AppContainer
 from app.core.database import (
     build_engine,
@@ -32,11 +33,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     engine = build_engine(settings)
     session_factory = build_session_factory(engine)
     redis_client = build_redis_client(settings)
+
+    rzd_config = build_rzd_config(settings)
+
+    rzd_http_client_factory = RzdHttpClientFactory(rzd_config)
+
     container = AppContainer(
         settings=settings,
         engine=engine,
         session_factory=session_factory,
         redis_client=redis_client,
+        rzd_http_client_factory=rzd_http_client_factory,
+        rzd_config=rzd_config,
     )
 
     app.state.container = container
@@ -48,6 +56,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         logger.info("Application shutdown initiated")
         await container.shutdown()
+        await rzd_http_client_factory.aclose()
         await dispose_redis_client(redis_client)
         await dispose_engine(engine)
         logger.info("Application shutdown completed")
