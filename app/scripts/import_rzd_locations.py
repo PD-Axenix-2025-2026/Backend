@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import sys
+import uuid
 from datetime import datetime
 from typing import Any
 
@@ -33,6 +34,8 @@ logger = logging.getLogger(__name__)
 
 class RZDLocationImporter:
     """Импортер локаций РЖД"""
+
+    RZD_NAMESPACE = uuid.UUID("a1b2c3d4-e5f6-7890-abcd-ef1234567890")
 
     def __init__(self, language: str = "ru"):
         self.language = language
@@ -195,8 +198,8 @@ class RZDLocationImporter:
         async with session_factory() as session:
             for location_data in locations:
                 try:
-                    code = location_data.get("expressCode")
-                    name = location_data.get("name")
+                    code = str(location_data.get("expressCode"))
+                    name = str(location_data.get("name"))
 
                     if not code or not name:
                         logger.warning(
@@ -219,6 +222,7 @@ class RZDLocationImporter:
 
                         # Создаем новую локацию
                         location = Location(
+                            id=uuid.uuid5(self.RZD_NAMESPACE, code),
                             code=code,
                             name=name,
                             city_name=city_name or name,
