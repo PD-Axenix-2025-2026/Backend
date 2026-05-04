@@ -287,7 +287,8 @@ class RZDLocationImporter:
                     if location_type != LocationType.city:
                         city_id = location_data.get("cityId", "no_id")
                         city_name = next(
-                          (loc for loc in locations if loc.get("nodeId") == city_id), {}
+                            (loc for loc in locations if loc.get("nodeId") == city_id),
+                            {},
                         ).get("name")
 
                     if not city_name and location_type == LocationType.city:

@@ -46,8 +46,8 @@ def normalize_station_name(value: Any) -> str:
 
 
 def load_station_names_from_json(
-        file_path: str,
-        key: str | None = None,
+    file_path: str,
+    key: str | None = None,
 ) -> list[str]:
     """Load station names from a JSON file.
 
@@ -336,8 +336,7 @@ async def _main_async() -> None:
     if args.stations_file:
         logger.info("Loading station names from %s", args.stations_file)
         station_names = load_station_names_from_json(
-            args.stations_file,
-            args.stations_name_key
+            args.stations_file, args.stations_name_key
         )
         logger.info("Station names extracted: %s", len(station_names))
 

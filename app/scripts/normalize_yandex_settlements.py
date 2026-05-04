@@ -150,7 +150,7 @@ Examples:
         "--output-file",
         type=str,
         help="Output JSON file name "
-             "(default: yandex_settlements_normalized_TIMESTAMP.json)",
+        "(default: yandex_settlements_normalized_TIMESTAMP.json)",
     )
     parser.add_argument(
         "--verbose",

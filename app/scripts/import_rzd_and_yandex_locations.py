@@ -78,8 +78,9 @@ class LocationMerger:
 
         for loc in locations:
             if loc["nodeType"] != "city":
-                by_id[loc["nodeId"]]["city"] = by_id.get(loc.get("cityId", ""),
-                                                         {}).get("name")
+                by_id[loc["nodeId"]]["city"] = by_id.get(loc.get("cityId", ""), {}).get(
+                    "name"
+                )
 
         self.stats["total_rzd"] = len(by_code)
         logger.info(f"Loaded {len(by_code)} RZD locations from {filepath}")
