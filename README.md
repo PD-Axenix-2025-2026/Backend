@@ -144,7 +144,10 @@ app/
   models/        ORM-модели
   providers/     провайдеры источников маршрутов
   repositories/  слой доступа к данным
+  scripts/       скрипты для заполнения базы данных
   services/      бизнес-логика
+data/            вспомогательные данные, необходимые для работы с внешними api
+data_pipelines/  пайплайны для подготовки и обработки данных
 tests/           smoke-тесты wiring и служебных endpoint-ов
 ```
 
@@ -218,6 +221,25 @@ poetry run python -m app.scripts.seed_mock_data --base-date 2026-04-14
 - `POST /api/searches` для маршрутов `Таганрог -> Москва`
 
 В мок-данных есть города, аэропорты, железнодорожные вокзалы, автовокзал, несколько перевозчиков и прямые сегменты для `plane`, `train` и `bus`.
+
+## Настройка основного сценария работы. Работа с внешними API (РЖД и Яндекс.Расписания)
+
+Чтобы сервис мог запрашивать и обрабатывать маршруты из внешних API требуется:
+
+1. Записать в поле `PDAXENIX_YANDEX_RASP_API_KEY` в .env файле api ключ Яндекс.Расписаний.
+Также можно задать флаги `PDAXENIX_USE_RZD_API` и `PDAXENIX_USE_YANDEX_API` для включения/отключения внешних запросов по отдельности.
+По умолчанию оба флага взведены.
+
+2. Запустить скрипт заполнения таблицы locations информацией о локациях, взятой из внешних API:
+
+```bash
+poetry run python -m app.scripts.import_rzd_and_yandex_locations --rzd-file app\data\rzd_locations.json \
+      --yandex-file app\data\yandex_rasp_locations.json \
+      --matches-file app\data\rzd_yandex_location_matches.json
+```
+
+При необходимости также можно использовать скрипты import_rzd_locations.py и import_yandex_locations.py
+для заполнения базы данных локациями только из одного источника.
 
 ## Проверка качества кода
 

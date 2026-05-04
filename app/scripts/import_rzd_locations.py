@@ -17,7 +17,6 @@ from datetime import datetime
 from typing import Any
 
 import httpx
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import get_settings
@@ -41,6 +40,59 @@ class RZDLocationImporter:
         self.language = language
         self.suggester_url = "https://ticket.rzd.ru/api/v1/suggests"
 
+    async def _fetch_locations_with_client(
+        self,
+        client: httpx.AsyncClient,
+        prefix: str,
+        semaphore: asyncio.Semaphore | None = None,
+    ) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {
+            "Query": prefix,
+            "language": self.language,
+            "SynonymOn": 1,
+        }
+
+        try:
+            if semaphore is None:
+                response = await client.get(
+                    self.suggester_url,
+                    params=params,
+                    headers={
+                        "Accept": "application/json",
+                        "User-Agent": "Mozilla/5.0",
+                    },
+                )
+            else:
+                async with semaphore:
+                    response = await client.get(
+                        self.suggester_url,
+                        params=params,
+                        headers={
+                            "Accept": "application/json",
+                            "User-Agent": "Mozilla/5.0",
+                        },
+                    )
+
+            response.raise_for_status()
+            data = response.json()
+
+            locations = []
+            if isinstance(data, list):
+                for item in data:
+                    if (
+                        isinstance(item, dict)
+                        and "name" in item
+                        and "expressCode" in item
+                        and item.get("countryIso", "") == "RU"
+                    ):
+                        locations.append(item)
+
+            return locations
+
+        except Exception as e:
+            logger.debug("Error fetching locations for prefix '%s': %s", prefix, e)
+            return []
+
     async def fetch_locations(self, prefix: str) -> list[dict[str, Any]]:
         """
         Получение локаций по префиксу из suggester API
@@ -51,75 +103,121 @@ class RZDLocationImporter:
         Returns:
             Список локаций
         """
-        params = {
-            "Query": prefix,
-            "language": self.language,
-        }
-
         async with httpx.AsyncClient(timeout=30.0) as client:
-            try:
-                response = await client.get(
-                    self.suggester_url,
-                    params=params,
-                    headers={
-                        "Accept": "application/json",
-                        "User-Agent": "Mozilla/5.0",
-                    },
-                )
-                response.raise_for_status()
-                data = response.json()
+            return await self._fetch_locations_with_client(client, prefix)
 
-                locations = []
-                if isinstance(data, list):
-                    for item in data:
-                        if (
-                            isinstance(item, dict)
-                            and "name" in item
-                            and "expressCode" in item
-                        ):
-                            locations.append(item)
-
-                return locations
-
-            except Exception as e:
-                logger.debug(f"Error fetching locations for prefix '{prefix}': {e}")
-                return []
-
-    async def fetch_all_locations(self) -> list[dict[str, Any]]:
+    async def fetch_all_locations(
+        self,
+        max_prefix_length: int | None = None,
+        max_concurrency: int = 1,
+        pause_every: int = 200,
+        pause_seconds: float = 1.0,
+        progress_every: int = 50,
+    ) -> list[dict[str, Any]]:
         """
-        Получение всех локаций через перебор двухбуквенных префиксов
+        Получение всех локаций через перебор префиксов.
+
+        Сначала перебираем все пары букв, затем углубляемся в тройки и дальше
+        только для тех префиксов, где есть непустой ответ. По умолчанию
+        глубина не ограничена (остановка по пустым ответам).
+
+        Args:
+            max_prefix_length: Максимальная длина префикса (None = без ограничений)
+            max_concurrency: Максимальное количество параллельных запросов
+            pause_every: Пауза после каждых N запросов (0 = без паузы)
+            pause_seconds: Длительность паузы в секундах
+            progress_every: Как часто выводить прогресс (0 = отключить)
 
         Returns:
             Список всех уникальных локаций
         """
         alphabet = "абвгдежзийклмнопрстуфхцчшщъыьэюя"
-        seen_codes = set()
+        seen_node_ids = set()
         all_locations = []
+        prefixes = [a + b for a in alphabet for b in alphabet]
+        current_length = 2
 
-        total_prefixes = len(alphabet) ** 2
-        processed = 0
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            semaphore = asyncio.Semaphore(max_concurrency)
 
-        for char1 in alphabet:
-            for char2 in alphabet:
-                prefix = char1 + char2
-                locations = await self.fetch_locations(prefix)
+            async def fetch_with_prefix(
+                prefix: str,
+            ) -> tuple[str, list[dict[str, Any]]]:
+                locations = await self._fetch_locations_with_client(
+                    client,
+                    prefix,
+                    semaphore,
+                )
+                return prefix, locations
 
-                # Добавляем только уникальные локации по expressCode
-                for location in locations:
-                    code = location.get("expressCode")
-                    if code and code not in seen_codes:
-                        seen_codes.add(code)
-                        all_locations.append(location)
+            while prefixes:
+                logger.info(
+                    "Processing %s prefixes of length %s",
+                    len(prefixes),
+                    current_length,
+                )
 
-                processed += 1
-                if processed % 100 == 0:
-                    logger.info(
-                        f"Processed {processed}/{total_prefixes} prefixes, "
-                        f"found {len(all_locations)} unique locations so far"
-                    )
+                tasks = [
+                    asyncio.create_task(fetch_with_prefix(prefix))
+                    for prefix in prefixes
+                ]
 
-                # Небольшая задержка чтобы не перегружать API
-                await asyncio.sleep(0.05)
+                next_prefixes: set[str] = set()
+                processed = 0
+
+                for task in asyncio.as_completed(tasks):
+                    prefix, locations = await task
+
+                    if locations:
+                        # Добавляем только уникальные локации по nodeId
+                        for location in locations:
+                            express_code = location.get("expressCode")
+                            node_id = location.get("nodeId")
+                            if not express_code:
+                                continue
+
+                            unique_key = (
+                                node_id
+                                if node_id is not None
+                                else f"express:{express_code}"
+                            )
+                            if unique_key not in seen_node_ids:
+                                seen_node_ids.add(unique_key)
+                                all_locations.append(location)
+
+                        if (
+                            max_prefix_length is None
+                            or current_length < max_prefix_length
+                        ):
+                            for char in alphabet:
+                                next_prefixes.add(prefix + char)
+
+                    processed += 1
+                    if progress_every > 0 and (
+                        processed == 1 or processed % progress_every == 0
+                    ):
+                        logger.info(
+                            "Processed %s/%s prefixes, \
+                            found %s unique locations so far",
+                            processed,
+                            len(tasks),
+                            len(all_locations),
+                        )
+
+                    if (
+                        pause_every > 0
+                        and pause_seconds > 0
+                        and processed % pause_every == 0
+                    ):
+                        logger.info(
+                            "Pausing for %.2fs after %s requests",
+                            pause_seconds,
+                            processed,
+                        )
+                        await asyncio.sleep(pause_seconds)
+
+                prefixes = sorted(next_prefixes)
+                current_length += 1
 
         return all_locations
 
@@ -147,32 +245,6 @@ class RZDLocationImporter:
         else:
             return LocationType.railway_station  # По умолчанию
 
-    def extract_region_info(self, region_str: str) -> tuple[str, str | None]:
-        """
-        Извлечение информации о регионе
-
-        Args:
-            region_str: Строка с регионом из API
-
-        Returns:
-            Кортеж (часовой пояс (пока всегда "Europe/Moscow"!), название города)
-        """
-        city_name = None
-
-        if region_str:
-            parts = region_str.split(",")
-            if parts:
-                # Первая часть обычно содержит тип и название населенного пункта
-                first_part = parts[0].strip()
-                if first_part.startswith("город"):
-                    city_name = first_part.replace("город", "").strip()
-                elif first_part.startswith("г."):
-                    city_name = first_part.replace("г.", "").strip()
-                else:
-                    city_name = first_part
-
-        return "Europe/Moscow", city_name
-
     async def import_to_database(
         self,
         session_factory: async_sessionmaker[AsyncSession],
@@ -198,7 +270,7 @@ class RZDLocationImporter:
         async with session_factory() as session:
             for location_data in locations:
                 try:
-                    code = str(location_data.get("expressCode"))
+                    code = str(location_data.get("nodeId"))
                     name = str(location_data.get("name"))
 
                     if not code or not name:
@@ -208,37 +280,35 @@ class RZDLocationImporter:
                         stats["skipped"] += 1
                         continue
 
-                    # Проверяем существует ли локация
-                    result = await session.execute(
-                        select(Location).where(Location.code == code)
+                    location_type = self.map_location_type(location_data)
+
+                    country_code = location_data.get("countryIso", "RU")
+
+                    if location_type != LocationType.city:
+                        city_id = location_data.get("cityId", "no_id")
+                        city_name = next(
+                          (loc for loc in locations if loc.get("nodeId") == city_id), {}
+                        ).get("name")
+
+                    if not city_name and location_type == LocationType.city:
+                        city_name = name
+
+                    location = Location(
+                        id=uuid.uuid5(self.RZD_NAMESPACE, code),
+                        code=code,
+                        name=name,
+                        city_name=city_name,
+                        country_code=country_code,
+                        location_type=location_type,
+                        lat=None,
+                        lon=None,
+                        timezone="Europe/Moscow" if country_code == "RU" else "UTC",
+                        is_hub=False,
                     )
-                    existing = result.scalar_one_or_none()
+                    session.add(location)
+                    stats["added"] += 1
 
-                    if existing is None:
-                        # Извлекаем информацию
-                        timezone, city_name = self.extract_region_info(
-                            location_data.get("region", "")
-                        )
-
-                        # Создаем новую локацию
-                        location = Location(
-                            id=uuid.uuid5(self.RZD_NAMESPACE, code),
-                            code=code,
-                            name=name,
-                            city_name=city_name or name,
-                            country_code=location_data.get("countryIso", "RU"),
-                            location_type=self.map_location_type(location_data),
-                            lat=None,
-                            lon=None,
-                            timezone=timezone,
-                            is_hub=False,
-                        )
-                        session.add(location)
-                        stats["added"] += 1
-
-                        logger.debug(f"Added location: {name} ({code})")
-                    else:
-                        stats["skipped"] += 1
+                    logger.debug(f"Added location: {name} ({code})")
 
                 except Exception as e:
                     logger.error(
@@ -321,7 +391,13 @@ async def _main_async() -> None:
         else:
             # Режим 1 или 2: Загрузка из API
             logger.info("Starting to fetch locations from RZD API...")
-            locations = await importer.fetch_all_locations()
+            locations = await importer.fetch_all_locations(
+                max_prefix_length=args.max_prefix_length,
+                max_concurrency=args.max_concurrency,
+                pause_every=args.pause_every,
+                pause_seconds=args.pause_seconds,
+                progress_every=args.progress_every,
+            )
 
             if not locations:
                 logger.error("No locations found from API!")
@@ -364,6 +440,15 @@ def _parse_args() -> argparse.Namespace:
 Examples:
   # Fetch from API and save to JSON only
   python app/scripts/import_rzd_locations.py
+
+  # Fetch with deeper prefix search and higher concurrency
+  python app/scripts/import_rzd_locations.py --max-prefix-length 4 --max-concurrency 50
+    
+  # Fetch with pauses to reduce API load
+  python app/scripts/import_rzd_locations.py --pause-every 200 --pause-seconds 2
+    
+  # Fetch with more frequent progress output
+  python app/scripts/import_rzd_locations.py --progress-every 20
 
   # Fetch from API and import to database
   python app/scripts/import_rzd_locations.py --import-db
@@ -411,6 +496,36 @@ Examples:
         type=str,
         default="ru",
         help="Language for location names (default: ru)",
+    )
+    parser.add_argument(
+        "--max-prefix-length",
+        type=int,
+        default=None,
+        help="Max prefix length to explore (default: unlimited)",
+    )
+    parser.add_argument(
+        "--max-concurrency",
+        type=int,
+        default=1,
+        help="Max concurrent requests (default: 25)",
+    )
+    parser.add_argument(
+        "--pause-every",
+        type=int,
+        default=200,
+        help="Pause after every N requests (default: 200, 0 = disabled)",
+    )
+    parser.add_argument(
+        "--pause-seconds",
+        type=float,
+        default=1.0,
+        help="Pause duration in seconds (default: 1.0)",
+    )
+    parser.add_argument(
+        "--progress-every",
+        type=int,
+        default=50,
+        help="Progress log interval (default: 50, 0 = disabled)",
     )
     parser.add_argument(
         "--verbose",
