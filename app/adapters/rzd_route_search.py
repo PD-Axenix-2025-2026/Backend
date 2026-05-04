@@ -15,6 +15,7 @@ from app.models.location import Location
 from app.models.route_segment import RouteSegment
 from app.repositories.location_repository import LocationRepository
 from app.services.models import RouteCandidate, RouteSearchCriteria
+from app.services.ports import RouteSearchPort
 from app.utils.time_utils import timespan_to_minutes
 
 logger = logging.getLogger(__name__)
@@ -44,7 +45,7 @@ class RZDTimeoutError(RZDApiError):
     pass
 
 
-class RzdRouteSearchAdapter:
+class RzdRouteSearchAdapter(RouteSearchPort):
     """Адаптер для поиска маршрутов через API РЖД"""
 
     BASE_URL = "https://pass.rzd.ru/timetable/public"
@@ -87,7 +88,7 @@ class RzdRouteSearchAdapter:
             repository = LocationRepository(session)
             loc = await repository.get_by_id(location_id)
             if loc:
-                return loc.code
+                return loc.rzd_code
 
             return None
 
@@ -207,7 +208,7 @@ class RzdRouteSearchAdapter:
         destination_code = await self._get_station_code(criteria.destination_id)
 
         if not origin_code or not destination_code:
-            logger.error(
+            logger.debug(
                 "Station codes not found: origin=%s (%s), destination=%s (%s)",
                 criteria.origin_id,
                 origin_code,

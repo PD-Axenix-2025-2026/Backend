@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     checkout_link_ttl_seconds: int = 180
 
     # РЖД API конфигурация
+    use_rzd_api: bool = True
     rzd_language: str = "ru"
     rzd_timeout: float = 30.0
     rzd_user_agent: str | None = (
@@ -31,6 +32,10 @@ class Settings(BaseSettings):
     )
     rzd_referer: str | None = "https://ticket.rzd.ru/"
     rzd_proxy: str | None = None
+
+    # Яндекс API конфигурация
+    use_yandex_api: bool = True
+    yandex_rasp_api_key: str | None = None
 
     model_config = SettingsConfigDict(
         env_prefix="PDAXENIX_",

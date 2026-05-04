@@ -19,6 +19,8 @@ class Location(UUIDPrimaryKeyMixin, Base):
 
     # Location identity
     code: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)
+    rzd_code: Mapped[str | None] = mapped_column(String(64), index=True)
+    yandex_code: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     city_name: Mapped[str | None] = mapped_column(String(255), index=True)
     country_code: Mapped[str | None] = mapped_column(CHAR(2))

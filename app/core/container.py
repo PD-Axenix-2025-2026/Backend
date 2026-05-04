@@ -4,12 +4,15 @@ from dataclasses import dataclass, field
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-# from app.adapters.database_route_search import DatabaseRouteSearchAdapter
+from app.adapters.database_route_search import DatabaseRouteSearchAdapter
+from app.adapters.route_search_orchestrator import RouteSearchOrchestrator
 from app.adapters.rzd_route_search import RzdRouteSearchAdapter
 from app.adapters.sqlalchemy_locations import SqlAlchemyLocationReadAdapter
 from app.adapters.sqlalchemy_route_segments import SqlAlchemyRouteSegmentReadAdapter
+from app.adapters.yandex_route_search import YandexRaspRouteSearchAdapter
 from app.clients.rzd_client_factory import RzdConfig, RzdHttpClientFactory
 from app.core.config import Settings
+from app.services.ports import RouteSearchPort
 from app.services.runtime import SearchRuntimeCoordinator
 from app.services.search_store import InMemorySearchStore
 from app.services.search_validation import SearchCriteriaValidator
@@ -36,8 +39,7 @@ class AppContainer:
     search_store: InMemorySearchStore = field(default_factory=InMemorySearchStore)
     location_reader: SqlAlchemyLocationReadAdapter = field(init=False)
     route_segment_reader: SqlAlchemyRouteSegmentReadAdapter = field(init=False)
-    # route_search: DatabaseRouteSearchAdapter = field(init=False)
-    route_search: RzdRouteSearchAdapter = field(init=False)
+    route_search: RouteSearchOrchestrator = field(init=False)
     list_locations_use_case: ListLocationsUseCase = field(init=False)
     create_search_use_case: CreateSearchUseCase = field(init=False)
     get_search_results_use_case: GetSearchResultsUseCase = field(init=False)
@@ -51,13 +53,33 @@ class AppContainer:
         self.route_segment_reader = SqlAlchemyRouteSegmentReadAdapter(
             self.session_factory
         )
-        # self.route_search = DatabaseRouteSearchAdapter(self.session_factory)
 
-        self.route_search = RzdRouteSearchAdapter(
-            http_client_factory=self.rzd_http_client_factory,
-            database_session_factory=self.session_factory,
-            config=self.rzd_config,
-        )
+        used_adapters: list[RouteSearchPort] = []
+
+        # если обращаемся к РЖД
+        if self.settings.use_rzd_api:
+            used_adapters.append(
+                RzdRouteSearchAdapter(
+                    http_client_factory=self.rzd_http_client_factory,
+                    database_session_factory=self.session_factory,
+                    config=self.rzd_config,
+                )
+            )
+
+        # если обращаемся к Яндекс.Расписаниям
+        if self.settings.use_yandex_api and self.settings.yandex_rasp_api_key:
+            used_adapters.append(
+                YandexRaspRouteSearchAdapter(
+                    api_key=self.settings.yandex_rasp_api_key,
+                    database_session_factory=self.session_factory,
+                )
+            )
+
+        # fallback на поиск в своей базе
+        if not used_adapters:
+            used_adapters.append(DatabaseRouteSearchAdapter(self.session_factory))
+
+        self.route_search = RouteSearchOrchestrator(adapters=used_adapters)
 
         validator = SearchCriteriaValidator(location_reader=self.location_reader)
         run_search_use_case = RunSearchUseCase(
