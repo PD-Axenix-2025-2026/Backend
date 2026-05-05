@@ -5,6 +5,7 @@ from enum import StrEnum
 from uuid import UUID
 
 from app.models.enums import LocationType, TransportType
+from app.models.route_segment import RouteSegment
 
 
 class SearchStatus(StrEnum):
@@ -70,3 +71,4 @@ class RouteCandidate:
     total_price: Decimal | None
     total_duration_minutes: int | None
     transfers: int = 0
+    resolved_segments: tuple[RouteSegment, ...] = field(default_factory=tuple)

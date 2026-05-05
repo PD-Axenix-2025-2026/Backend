@@ -184,6 +184,7 @@ def _collect_segment_ids(candidates: Sequence[RouteCandidate]) -> tuple[UUID, ..
         dict.fromkeys(
             segment_id
             for candidate in candidates
+            if not candidate.resolved_segments
             for segment_id in candidate.segment_ids
         )
     )
