@@ -235,7 +235,8 @@ poetry run python -m app.scripts.seed_mock_data --base-date 2026-04-14
 ```bash
 poetry run python -m app.scripts.import_rzd_and_yandex_locations --rzd-file app\data\rzd_locations.json \
       --yandex-file app\data\yandex_rasp_locations.json \
-      --matches-file app\data\rzd_yandex_location_matches.json
+      --matches-file app\data\rzd_yandex_location_matches.json \
+      --import-db
 ```
 
 При необходимости также можно использовать скрипты import_rzd_locations.py и import_yandex_locations.py
