@@ -15,8 +15,11 @@ from app.schemas.routes import (
     CheckoutLinkResponse,
     RouteDetailResponse,
 )
-from app.services.search_store_models import RouteNotFoundError
-from app.services.use_cases import CreateCheckoutLinkUseCase, GetRouteDetailUseCase
+from app.services.application.use_cases import (
+    CreateCheckoutLinkUseCase,
+    GetRouteDetailUseCase,
+)
+from app.services.search.store.models import RouteNotFoundError
 
 router = APIRouter()
 logger = logging.getLogger(__name__)

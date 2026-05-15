@@ -1,24 +1,46 @@
+from __future__ import annotations
+
 import asyncio
 import logging
-import uuid
-from datetime import datetime
+from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.adapters.provider_route_support import (
+    build_provider_segment_id,
+    has_transfer_marker,
+    resolve_provider_location,
+    resolve_provider_route_duration_minutes,
+    resolve_provider_route_total_price,
+)
 from app.clients.rzd_client_factory import RzdConfig, RzdHttpClientFactory
-from app.models.carrier import Carrier
 from app.models.enums import TransportType
 from app.models.location import Location
-from app.models.route_segment import RouteSegment
 from app.repositories.location_repository import LocationRepository
-from app.services.models import RouteCandidate, RouteSearchCriteria
-from app.services.ports import RouteSearchPort
+from app.services.application.ports import RouteSearchPort
+from app.services.search.contracts import (
+    ProviderRouteSegment,
+    RouteCandidate,
+    RouteSearchCriteria,
+)
 from app.utils.time_utils import timespan_to_minutes
 
 logger = logging.getLogger(__name__)
+
+_TRANSFER_LEG_KEYS = ("details", "legs", "segments", "path")
+_TRANSFER_MARKER_KEYS = (
+    "transfers",
+    "transfer",
+    "changes",
+    "change",
+    "hasTransfers",
+    "has_transfer",
+    "withTransfer",
+)
 
 
 class RZDApiError(Exception):
@@ -74,23 +96,28 @@ class RzdRouteSearchAdapter(RouteSearchPort):
     async def _get_session(self) -> httpx.AsyncClient:
         return await self._http_client_factory.get()
 
-    async def _get_station_code(self, location_id: uuid.UUID) -> str | None:
-        """
-        Получение кода локации РЖД по ID из БД
-
-        Args:
-            location_id: ID локации
-
-        Returns:
-            Код локации для API РЖД или None
-        """
+    async def _load_search_inputs(
+        self,
+        criteria: RouteSearchCriteria,
+    ) -> tuple[Location | None, Location | None, str | None, str | None]:
         async with self._database_session_factory() as session:
             repository = LocationRepository(session)
-            loc = await repository.get_by_id(location_id)
-            if loc:
-                return loc.rzd_code
+            origin = await repository.get_by_id(criteria.origin_id)
+            destination = await repository.get_by_id(criteria.destination_id)
+            return (
+                origin,
+                destination,
+                origin.rzd_code if origin is not None else None,
+                destination.rzd_code if destination is not None else None,
+            )
 
-            return None
+    async def _load_locations_by_codes(
+        self,
+        codes: tuple[str, ...],
+    ) -> dict[str, Location]:
+        async with self._database_session_factory() as session:
+            repository = LocationRepository(session)
+            return await repository.list_by_rzd_codes(codes)
 
     async def _fetch_routes(self, params: dict[str, Any]) -> Any:
         """
@@ -204,8 +231,12 @@ class RzdRouteSearchAdapter(RouteSearchPort):
             criteria.travel_date,
         )
 
-        origin_code = await self._get_station_code(criteria.origin_id)
-        destination_code = await self._get_station_code(criteria.destination_id)
+        (
+            requested_origin,
+            requested_destination,
+            origin_code,
+            destination_code,
+        ) = await self._load_search_inputs(criteria)
 
         if not origin_code or not destination_code:
             logger.debug(
@@ -224,7 +255,7 @@ class RzdRouteSearchAdapter(RouteSearchPort):
             "code0": origin_code,
             "code1": destination_code,
             "dt0": criteria.travel_date.strftime("%d.%m.%Y"),
-            "md": 0,  # 0 - без пересадок
+            "md": 1 if (criteria.preferences.max_transfers or 0) > 0 else 0,
         }
 
         response_data = await self._fetch_routes(params)
@@ -233,7 +264,17 @@ class RzdRouteSearchAdapter(RouteSearchPort):
             logger.warning("No routes found or API error")
             return []
 
-        routes = await self._parse_routes_response(response_data)
+        locations_by_code = await self._load_locations_by_codes(
+            _collect_rzd_codes(response_data)
+        )
+        routes = self._parse_routes_response(
+            response_data,
+            requested_origin=requested_origin,
+            requested_destination=requested_destination,
+            requested_origin_code=origin_code,
+            requested_destination_code=destination_code,
+            locations_by_code=locations_by_code,
+        )
 
         logger.debug(
             "RZD API route search completed candidate_count=%s",
@@ -242,9 +283,15 @@ class RzdRouteSearchAdapter(RouteSearchPort):
 
         return routes
 
-    async def _parse_routes_response(
+    def _parse_routes_response(
         self,
         response_data: dict[str, Any],
+        *,
+        requested_origin: Location | None,
+        requested_destination: Location | None,
+        requested_origin_code: str,
+        requested_destination_code: str,
+        locations_by_code: Mapping[str, Location],
     ) -> list[RouteCandidate]:
         """
         Парсинг ответа API и преобразование в RouteCandidate
@@ -255,62 +302,300 @@ class RzdRouteSearchAdapter(RouteSearchPort):
         Returns:
             Список маршрутов
         """
-        routes = []
-
-        # В ответе данные находятся в tp[0].list
         tp_data = response_data.get("tp", [])
         if not tp_data:
             logger.warning("No tp data in response")
             return []
 
-        routes_list = tp_data[0].get("list", [])
-
-        for route_data in routes_list:
-            segment = RouteSegment(
-                id=uuid.uuid4(),
-                transport_type=TransportType.train,
-                carrier=Carrier(name=route_data.get("carrier"), code=None),
-                segment_code=None,
-                origin_location=Location(
-                    id=uuid.uuid4(), name=route_data.get("station0"), code=None
-                ),
-                destination_location=Location(
-                    id=uuid.uuid4(), name=route_data.get("station1"), code=None
-                ),
-                departure_at=datetime.strptime(
-                    f"{route_data.get('date0')} {route_data.get('time0')}",
-                    "%d.%m.%Y %H:%M",
-                ),
-                arrival_at=datetime.strptime(
-                    f"{route_data.get('date1')} {route_data.get('time1')}",
-                    "%d.%m.%Y %H:%M",
-                ),
-                duration_minutes=timespan_to_minutes(route_data.get("timeInWay")),
-                price_amount=Decimal(route_data.get("cars", [{}])[0].get("tariff")),
-                currency_code="RUB",
-                available_seats=route_data.get("cars", [{}])[0].get("freeSeats"),
-                source_system="rzd_api",
-                source_record_id=None,
-                valid_from=datetime.now(),
-                valid_to=None,
-            )
-
+        routes: list[RouteCandidate] = []
+        for route_data in tp_data[0].get("list", []):
             try:
-                route_candidate = RouteCandidate(
-                    source="rzd_api",
-                    segment_ids=(segment.id,),
-                    total_price=route_data.get("cars", [{}])[0].get("tariff"),
-                    total_duration_minutes=timespan_to_minutes(
-                        route_data.get("timeInWay")
-                    ),
-                    transfers=0,
-                    resolved_segments=(segment,),
+                candidate = _build_rzd_candidate(
+                    route_data=route_data,
+                    requested_origin=requested_origin,
+                    requested_destination=requested_destination,
+                    requested_origin_code=requested_origin_code,
+                    requested_destination_code=requested_destination_code,
+                    locations_by_code=locations_by_code,
                 )
-
-                routes.append(route_candidate)
-
+                if candidate is not None:
+                    routes.append(candidate)
             except Exception as e:
-                logger.error(f"Error parsing route data: {e}, data: {route_data}")
+                logger.error("Error parsing route data: %s, data: %s", e, route_data)
                 continue
 
         return routes
+
+
+def _build_rzd_candidate(
+    *,
+    route_data: Mapping[str, Any],
+    requested_origin: Location | None,
+    requested_destination: Location | None,
+    requested_origin_code: str,
+    requested_destination_code: str,
+    locations_by_code: Mapping[str, Location],
+) -> RouteCandidate | None:
+    raw_legs = _resolve_rzd_raw_legs(route_data)
+    if raw_legs is None:
+        return None
+
+    provider_segments = _build_rzd_provider_segments(
+        raw_legs=raw_legs,
+        requested_origin=requested_origin,
+        requested_destination=requested_destination,
+        requested_origin_code=requested_origin_code,
+        requested_destination_code=requested_destination_code,
+        locations_by_code=locations_by_code,
+    )
+    if provider_segments is None:
+        return None
+
+    route_total_price = _resolve_rzd_route_total_price(
+        route_data,
+        provider_segments,
+    )
+    return RouteCandidate(
+        source="rzd_api",
+        segment_ids=tuple(segment.segment_id for segment in provider_segments),
+        total_price=route_total_price,
+        total_duration_minutes=_resolve_rzd_route_duration_minutes(
+            route_data,
+            provider_segments,
+        ),
+        transfers=len(provider_segments) - 1,
+        resolved_segments=provider_segments,
+    )
+
+
+def _resolve_rzd_raw_legs(
+    route_data: Mapping[str, Any],
+) -> tuple[dict[str, Any], ...] | None:
+    raw_legs = _extract_rzd_raw_legs(route_data)
+    if raw_legs is not None:
+        return raw_legs
+    if has_transfer_marker(route_data, _TRANSFER_MARKER_KEYS):
+        logger.debug("Skipping RZD transfer route without explicit legs")
+        return None
+    return (dict(route_data),)
+
+
+def _build_rzd_provider_segments(
+    *,
+    raw_legs: Sequence[Mapping[str, Any]],
+    requested_origin: Location | None,
+    requested_destination: Location | None,
+    requested_origin_code: str,
+    requested_destination_code: str,
+    locations_by_code: Mapping[str, Location],
+) -> tuple[ProviderRouteSegment, ...] | None:
+    provider_segments: list[ProviderRouteSegment] = []
+    for index, raw_leg in enumerate(raw_legs):
+        provider_segment = _build_rzd_provider_segment(
+            raw_leg,
+            requested_origin=requested_origin,
+            requested_destination=requested_destination,
+            requested_origin_code=requested_origin_code,
+            requested_destination_code=requested_destination_code,
+            locations_by_code=locations_by_code,
+            is_first=index == 0,
+            is_last=index == len(raw_legs) - 1,
+        )
+        if provider_segment is None:
+            return None
+        provider_segments.append(provider_segment)
+    return tuple(provider_segments)
+
+
+def _collect_rzd_codes(data: dict[str, Any]) -> tuple[str, ...]:
+    codes: set[str] = set()
+    for route_data in data.get("tp", [{}])[0].get("list", []):
+        raw_legs = _extract_rzd_raw_legs(route_data) or (route_data,)
+        for raw_leg in raw_legs:
+            origin_code = _extract_rzd_location_code(raw_leg, side=0)
+            destination_code = _extract_rzd_location_code(raw_leg, side=1)
+            if origin_code:
+                codes.add(origin_code)
+            if destination_code:
+                codes.add(destination_code)
+    return tuple(sorted(codes))
+
+
+def _extract_rzd_raw_legs(
+    route_data: Mapping[str, Any],
+) -> tuple[dict[str, Any], ...] | None:
+    for key in _TRANSFER_LEG_KEYS:
+        raw_value = route_data.get(key)
+        if not isinstance(raw_value, list):
+            continue
+        raw_legs = tuple(item for item in raw_value if isinstance(item, dict))
+        if raw_legs:
+            return raw_legs
+    return None
+
+
+def _build_rzd_provider_segment(
+    raw_leg: Mapping[str, Any],
+    *,
+    requested_origin: Location | None,
+    requested_destination: Location | None,
+    requested_origin_code: str,
+    requested_destination_code: str,
+    locations_by_code: Mapping[str, Location],
+    is_first: bool,
+    is_last: bool,
+) -> ProviderRouteSegment | None:
+    departure_at = _parse_rzd_datetime(
+        date_value=raw_leg.get("date0"),
+        time_value=raw_leg.get("time0"),
+    )
+    arrival_at = _parse_rzd_datetime(
+        date_value=raw_leg.get("date1"),
+        time_value=raw_leg.get("time1"),
+    )
+    if departure_at is None or arrival_at is None:
+        logger.debug("Skipping RZD leg because departure or arrival is missing")
+        return None
+
+    origin_code = _extract_rzd_location_code(raw_leg, side=0)
+    destination_code = _extract_rzd_location_code(raw_leg, side=1)
+    origin_location = resolve_provider_location(
+        code=origin_code,
+        requested_code=requested_origin_code if is_first else None,
+        requested_location=requested_origin if is_first else None,
+        locations_by_code=locations_by_code,
+    )
+    destination_location = resolve_provider_location(
+        code=destination_code,
+        requested_code=requested_destination_code if is_last else None,
+        requested_location=requested_destination if is_last else None,
+        locations_by_code=locations_by_code,
+    )
+    if origin_location is None or destination_location is None:
+        logger.debug(
+            "Skipping RZD leg because canonical locations are unresolved "
+            "origin_code=%s destination_code=%s",
+            origin_code,
+            destination_code,
+        )
+        return None
+
+    segment_code = raw_leg.get("number")
+    source_record_id = raw_leg.get("trainId") or raw_leg.get("number")
+    tariff = _extract_rzd_tariff(raw_leg)
+    currency_code = str(raw_leg.get("currency") or "RUB")
+    return ProviderRouteSegment(
+        segment_id=build_provider_segment_id(
+            source="rzd_api",
+            origin_code=origin_location.code,
+            destination_code=destination_location.code,
+            departure_at=departure_at,
+            arrival_at=arrival_at,
+            segment_code=segment_code,
+        ),
+        transport_type=TransportType.train,
+        carrier_name=str(raw_leg.get("carrier") or "RZD"),
+        carrier_code=None,
+        segment_code=segment_code,
+        origin_location=origin_location,
+        destination_location=destination_location,
+        departure_at=departure_at,
+        arrival_at=arrival_at,
+        duration_minutes=_extract_rzd_duration_minutes(
+            raw_leg,
+            departure_at=departure_at,
+            arrival_at=arrival_at,
+        ),
+        price_amount=tariff,
+        currency_code=currency_code,
+        available_seats=_extract_rzd_available_seats(raw_leg),
+        source_system="rzd_api",
+        source_record_id=str(source_record_id)
+        if source_record_id is not None
+        else None,
+        valid_from=datetime.now(UTC),
+        valid_to=None,
+    )
+
+
+def _parse_rzd_datetime(
+    *,
+    date_value: Any,
+    time_value: Any,
+) -> datetime | None:
+    if not date_value or not time_value:
+        return None
+    try:
+        return datetime.strptime(f"{date_value} {time_value}", "%d.%m.%Y %H:%M")
+    except ValueError:
+        return None
+
+
+def _extract_rzd_duration_minutes(
+    raw_leg: Mapping[str, Any],
+    *,
+    departure_at: datetime,
+    arrival_at: datetime,
+) -> int:
+    time_in_way = raw_leg.get("timeInWay")
+    if time_in_way:
+        return timespan_to_minutes(str(time_in_way))
+    return int((arrival_at - departure_at).total_seconds() // 60)
+
+
+def _extract_rzd_tariff(raw_leg: Mapping[str, Any]) -> Decimal | None:
+    cars = raw_leg.get("cars")
+    if isinstance(cars, list) and cars:
+        tariff = cars[0].get("tariff")
+        if tariff is not None:
+            return Decimal(str(tariff))
+    tariff = raw_leg.get("tariff")
+    if tariff is None:
+        return None
+    return Decimal(str(tariff))
+
+
+def _extract_rzd_available_seats(raw_leg: Mapping[str, Any]) -> int | None:
+    cars = raw_leg.get("cars")
+    if isinstance(cars, list) and cars:
+        free_seats = cars[0].get("freeSeats")
+        return int(free_seats) if free_seats is not None else None
+    free_seats = raw_leg.get("freeSeats")
+    return int(free_seats) if free_seats is not None else None
+
+
+def _extract_rzd_location_code(raw_leg: Mapping[str, Any], *, side: int) -> str | None:
+    candidate_keys = (
+        f"route{side}",
+        f"code{side}",
+        "fromCode" if side == 0 else "whereCode",
+        "code0" if side == 0 else "code1",
+    )
+    for key in candidate_keys:
+        value = raw_leg.get(key)
+        if value:
+            return str(value)
+    return None
+
+
+def _resolve_rzd_route_total_price(
+    route_data: Mapping[str, Any],
+    provider_segments: Sequence[ProviderRouteSegment],
+) -> Decimal | None:
+    return resolve_provider_route_total_price(
+        route_total_price=_extract_rzd_tariff(route_data),
+        provider_segments=provider_segments,
+    )
+
+
+def _resolve_rzd_route_duration_minutes(
+    route_data: Mapping[str, Any],
+    provider_segments: Sequence[ProviderRouteSegment],
+) -> int:
+    explicit_duration_minutes = None
+    if route_data.get("timeInWay"):
+        explicit_duration_minutes = timespan_to_minutes(str(route_data["timeInWay"]))
+    return resolve_provider_route_duration_minutes(
+        explicit_duration_minutes=explicit_duration_minutes,
+        provider_segments=provider_segments,
+    )

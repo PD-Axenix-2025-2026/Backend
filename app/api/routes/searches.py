@@ -22,10 +22,13 @@ from app.schemas.searches import (
     SearchCreateResponse,
     SearchResultsResponse,
 )
-from app.services.models import SearchSortOption
-from app.services.search_store_models import SearchNotFoundError
-from app.services.search_validation import SearchValidationError
-from app.services.use_cases import CreateSearchUseCase, GetSearchResultsUseCase
+from app.services.application.use_cases import (
+    CreateSearchUseCase,
+    GetSearchResultsUseCase,
+)
+from app.services.search.contracts import SearchSortOption
+from app.services.search.store.models import SearchNotFoundError
+from app.services.search.validation import SearchValidationError
 
 router = APIRouter()
 logger = logging.getLogger(__name__)

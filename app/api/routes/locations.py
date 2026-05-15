@@ -10,7 +10,7 @@ from app.schemas.locations import (
     LocationAutocompleteItem,
     LocationAutocompleteResponse,
 )
-from app.services.use_cases import ListLocationsUseCase
+from app.services.application.use_cases import ListLocationsUseCase
 
 router = APIRouter()
 logger = logging.getLogger(__name__)

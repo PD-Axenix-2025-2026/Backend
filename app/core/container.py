@@ -12,11 +12,9 @@ from app.adapters.sqlalchemy_route_segments import SqlAlchemyRouteSegmentReadAda
 from app.adapters.yandex_route_search import YandexRaspRouteSearchAdapter
 from app.clients.rzd_client_factory import RzdConfig, RzdHttpClientFactory
 from app.core.config import Settings
-from app.services.ports import RouteSearchPort
-from app.services.runtime import SearchRuntimeCoordinator
-from app.services.search_store import InMemorySearchStore
-from app.services.search_validation import SearchCriteriaValidator
-from app.services.use_cases import (
+from app.services.application.ports import RouteSearchPort
+from app.services.application.runtime import SearchRuntimeCoordinator
+from app.services.application.use_cases import (
     CreateCheckoutLinkUseCase,
     CreateSearchUseCase,
     GetRouteDetailUseCase,
@@ -24,6 +22,8 @@ from app.services.use_cases import (
     ListLocationsUseCase,
     RunSearchUseCase,
 )
+from app.services.search.store.memory import InMemorySearchStore
+from app.services.search.validation import SearchCriteriaValidator
 
 logger = logging.getLogger(__name__)
 

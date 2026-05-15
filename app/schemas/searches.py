@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from app.models.enums import LocationType, TransportType
 from app.schemas.routes import RouteListItemResponse
-from app.services.contracts import SearchSortOption, SearchStatus
+from app.services.search.contracts import SearchSortOption, SearchStatus
 
 
 class SearchLocationReference(BaseModel):

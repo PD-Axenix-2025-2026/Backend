@@ -16,7 +16,7 @@ class RouteSummaryResponse(BaseModel):
     arrival_at: datetime
     duration_minutes: int
     transfers: int
-    total_price: MoneyResponse
+    total_price: MoneyResponse | None
 
 
 class RouteSegmentResponse(BaseModel):
@@ -34,7 +34,7 @@ class RouteSegmentResponse(BaseModel):
     departure_at: datetime
     arrival_at: datetime
     duration_minutes: int
-    price: MoneyResponse
+    price: MoneyResponse | None
     available_seats: int | None = None
     source_system: str | None = None
     source_record_id: str | None = None
