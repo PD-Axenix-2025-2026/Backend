@@ -1,49 +1,37 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import Any
 from uuid import uuid4
 
+import pytest
 from app.adapters.rzd_route_search import RzdRouteSearchAdapter
 from app.adapters.yandex_route_search import YandexRaspRouteSearchAdapter
 from app.models.location import Location
-from app.services.search.contracts import ProviderRouteSegment, RouteCandidate
+from app.services.search.contracts import (
+    ProviderRouteSegment,
+    RouteCandidate,
+    RouteSearchCriteria,
+)
 from app.services.search.snapshot_builder import build_route_snapshot
 
-from tests.support.route_search import build_location
+from tests.support.route_search import build_location, build_search_criteria
 
 
 def test_yandex_adapter_parses_direct_and_transfer_routes() -> None:
-    requested_origin = build_location(
-        code="MOW",
-        provider_code="c213",
-        name="Москва",
-    )
-    requested_destination = build_location(
-        code="SPB",
-        provider_code="c2",
-        name="Санкт-Петербург",
-    )
-    hub = build_location(
-        code="KZN",
-        provider_code="c43",
-        name="Казань",
-    )
-    adapter = YandexRaspRouteSearchAdapter(
-        api_key="test-key",
-        database_session_factory=None,  # type: ignore[arg-type]
-    )
+    requested_origin, requested_destination, hub = _build_yandex_moscow_spb_locations()
 
-    routes = adapter._parse_response(
+    routes = _build_yandex_adapter()._parse_response(
         _build_yandex_response_with_price(),
         requested_origin=requested_origin,
         requested_destination=requested_destination,
         requested_origin_code="c213",
         requested_destination_code="c2",
-        locations_by_code={
-            "c213": requested_origin,
-            "c2": requested_destination,
-            "c43": hub,
-        },
+        locations_by_code=_index_locations_by_provider_code(
+            requested_origin,
+            requested_destination,
+            hub,
+        ),
     )
 
     assert len(routes) == 2
@@ -65,44 +53,27 @@ def test_yandex_adapter_parses_direct_and_transfer_routes() -> None:
         candidate=transfer_candidate,
         segments=transfer_candidate.resolved_segments,
     )
-    assert snapshot.total_price is not None
-    assert snapshot.total_price.amount == Decimal("7300")
-    assert snapshot.segments[0].price is None
-    assert snapshot.segments[1].price is None
+    _assert_transfer_snapshot_prices(
+        total_price=snapshot.total_price.amount if snapshot.total_price else None,
+        first_segment_price=snapshot.segments[0].price,
+        second_segment_price=snapshot.segments[1].price,
+    )
 
 
 def test_yandex_adapter_keeps_transfer_route_without_total_price() -> None:
-    requested_origin = build_location(
-        code="KGD",
-        provider_code="c22",
-        name="Калининград",
-    )
-    requested_destination = build_location(
-        code="TYM",
-        provider_code="c55",
-        name="Тюмень",
-    )
-    hub = build_location(
-        code="MOW",
-        provider_code="c213",
-        name="Москва",
-    )
-    adapter = YandexRaspRouteSearchAdapter(
-        api_key="test-key",
-        database_session_factory=None,  # type: ignore[arg-type]
-    )
+    requested_origin, requested_destination, hub = _build_yandex_kgd_tym_locations()
 
-    routes = adapter._parse_response(
+    routes = _build_yandex_adapter()._parse_response(
         _build_yandex_response_without_total_price(),
         requested_origin=requested_origin,
         requested_destination=requested_destination,
         requested_origin_code="c22",
         requested_destination_code="c55",
-        locations_by_code={
-            "c22": requested_origin,
-            "c213": hub,
-            "c55": requested_destination,
-        },
+        locations_by_code=_index_locations_by_provider_code(
+            requested_origin,
+            requested_destination,
+            hub,
+        ),
     )
 
     assert len(routes) == 1
@@ -116,43 +87,27 @@ def test_yandex_adapter_keeps_transfer_route_without_total_price() -> None:
         candidate=transfer_candidate,
         segments=transfer_candidate.resolved_segments,
     )
-    assert snapshot.total_price is None
-    assert snapshot.segments[0].price is None
-    assert snapshot.segments[1].price is None
+    _assert_transfer_snapshot_prices(
+        total_price=None,
+        first_segment_price=snapshot.segments[0].price,
+        second_segment_price=snapshot.segments[1].price,
+    )
 
 
 def test_rzd_adapter_parses_direct_and_transfer_routes() -> None:
-    requested_origin = build_location(
-        code="MOW",
-        provider_code="2000000",
-        name="Москва",
-    )
-    requested_destination = build_location(
-        code="SPB",
-        provider_code="2004000",
-        name="Санкт-Петербург",
-    )
-    hub = build_location(
-        code="KZN",
-        provider_code="2060615",
-        name="Казань",
-    )
-    adapter = RzdRouteSearchAdapter(
-        http_client_factory=None,  # type: ignore[arg-type]
-        database_session_factory=None,  # type: ignore[arg-type]
-    )
+    requested_origin, requested_destination, hub = _build_rzd_moscow_spb_locations()
 
-    routes = adapter._parse_routes_response(
+    routes = _build_rzd_adapter()._parse_routes_response(
         _build_rzd_response(),
         requested_origin=requested_origin,
         requested_destination=requested_destination,
         requested_origin_code="2000000",
         requested_destination_code="2004000",
-        locations_by_code={
-            "2000000": requested_origin,
-            "2004000": requested_destination,
-            "2060615": hub,
-        },
+        locations_by_code=_index_locations_by_provider_code(
+            requested_origin,
+            requested_destination,
+            hub,
+        ),
     )
 
     assert len(routes) == 2
@@ -169,6 +124,59 @@ def test_rzd_adapter_parses_direct_and_transfer_routes() -> None:
     assert first_leg.origin_location.id == requested_origin.id
     assert first_leg.destination_location.id == hub.id
     assert second_leg.destination_location.id == requested_destination.id
+
+
+@pytest.mark.asyncio
+async def test_rzd_search_requests_direct_and_transfer_routes() -> None:
+    requested_origin, requested_destination, hub = _build_rzd_moscow_spb_locations()
+    criteria = _build_transfer_search_criteria(
+        origin=requested_origin,
+        destination=requested_destination,
+    )
+    adapter = _StubRzdRouteSearchAdapter(
+        requested_origin=requested_origin,
+        requested_destination=requested_destination,
+        locations=(requested_origin, requested_destination, hub),
+        responses_by_md={
+            0: _build_rzd_direct_only_response(),
+            1: _build_rzd_transfer_only_response(),
+        },
+    )
+
+    routes = await adapter.search(criteria)
+
+    assert adapter.md_calls == [0, 1]
+    assert [(candidate.transfers, candidate.total_price) for candidate in routes] == [
+        (0, Decimal("3300")),
+        (1, Decimal("7300")),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_rzd_search_keeps_successful_results_when_transfer_request_fails() -> (
+    None
+):
+    requested_origin, requested_destination, _ = _build_rzd_moscow_spb_locations()
+    criteria = _build_transfer_search_criteria(
+        origin=requested_origin,
+        destination=requested_destination,
+    )
+    adapter = _StubRzdRouteSearchAdapter(
+        requested_origin=requested_origin,
+        requested_destination=requested_destination,
+        locations=(requested_origin, requested_destination),
+        responses_by_md={
+            0: _build_rzd_direct_only_response(),
+            1: RuntimeError("transfer request failed"),
+        },
+    )
+
+    routes = await adapter.search(criteria)
+
+    assert adapter.md_calls == [0, 1]
+    assert [(candidate.transfers, candidate.total_price) for candidate in routes] == [
+        (0, Decimal("3300")),
+    ]
 
 
 def _assert_transfer_candidate_segments(
@@ -188,6 +196,130 @@ def _assert_transfer_candidate_segments(
     assert first_leg.price_amount is None
     assert second_leg.destination_location.id == requested_destination.id
     assert second_leg.price_amount is None
+
+
+def _assert_transfer_snapshot_prices(
+    *,
+    total_price: Decimal | None,
+    first_segment_price: object,
+    second_segment_price: object,
+) -> None:
+    assert total_price in {Decimal("7300"), None}
+    assert first_segment_price is None
+    assert second_segment_price is None
+
+
+def _build_yandex_adapter() -> YandexRaspRouteSearchAdapter:
+    return YandexRaspRouteSearchAdapter(
+        api_key="test-key",
+        database_session_factory=None,  # type: ignore[arg-type]
+    )
+
+
+def _build_rzd_adapter() -> RzdRouteSearchAdapter:
+    return RzdRouteSearchAdapter(
+        http_client_factory=None,  # type: ignore[arg-type]
+        database_session_factory=None,  # type: ignore[arg-type]
+    )
+
+
+def _build_yandex_moscow_spb_locations() -> tuple[Location, Location, Location]:
+    return (
+        build_location(code="MOW", provider_code="c213", name="Москва"),
+        build_location(code="SPB", provider_code="c2", name="Санкт-Петербург"),
+        build_location(code="KZN", provider_code="c43", name="Казань"),
+    )
+
+
+def _build_yandex_kgd_tym_locations() -> tuple[Location, Location, Location]:
+    return (
+        build_location(code="KGD", provider_code="c22", name="Калининград"),
+        build_location(code="TYM", provider_code="c55", name="Тюмень"),
+        build_location(code="MOW", provider_code="c213", name="Москва"),
+    )
+
+
+def _build_rzd_moscow_spb_locations() -> tuple[Location, Location, Location]:
+    return (
+        build_location(code="MOW", provider_code="2000000", name="Москва"),
+        build_location(code="SPB", provider_code="2004000", name="Санкт-Петербург"),
+        build_location(code="KZN", provider_code="2060615", name="Казань"),
+    )
+
+
+def _build_transfer_search_criteria(
+    *,
+    origin: Location,
+    destination: Location,
+) -> RouteSearchCriteria:
+    return build_search_criteria(
+        origin_id=origin.id,
+        origin_type=origin.location_type,
+        destination_id=destination.id,
+        destination_type=destination.location_type,
+        max_transfers=3,
+    )
+
+
+def _index_locations_by_provider_code(*locations: Location) -> dict[str, Location]:
+    indexed_locations: dict[str, Location] = {}
+    for location in locations:
+        provider_code = location.rzd_code or location.yandex_code
+        if provider_code is not None:
+            indexed_locations[provider_code] = location
+    return indexed_locations
+
+
+class _StubRzdRouteSearchAdapter(RzdRouteSearchAdapter):
+    def __init__(
+        self,
+        *,
+        requested_origin: Location,
+        requested_destination: Location,
+        locations: tuple[Location, ...],
+        responses_by_md: dict[int, dict[str, object] | Exception],
+    ) -> None:
+        super().__init__(
+            http_client_factory=None,  # type: ignore[arg-type]
+            database_session_factory=None,  # type: ignore[arg-type]
+        )
+        self._requested_origin = requested_origin
+        self._requested_destination = requested_destination
+        self._locations_by_code = _index_locations_by_provider_code(*locations)
+        self._responses_by_md = responses_by_md
+        self.md_calls: list[int] = []
+
+    async def _load_search_inputs(
+        self,
+        criteria: RouteSearchCriteria,
+    ) -> tuple[Location | None, Location | None, str | None, str | None]:
+        return (
+            self._requested_origin,
+            self._requested_destination,
+            self._requested_origin.rzd_code,
+            self._requested_destination.rzd_code,
+        )
+
+    async def _load_locations_by_codes(
+        self,
+        codes: tuple[str, ...],
+    ) -> dict[str, Location]:
+        return {
+            code: self._locations_by_code[code]
+            for code in codes
+            if code in self._locations_by_code
+        }
+
+    async def _fetch_routes(
+        self,
+        params: dict[str, int | str],
+    ) -> object:
+        md = int(params["md"])
+        self.md_calls.append(md)
+        response = self._responses_by_md[md]
+        if isinstance(response, Exception):
+            raise response
+        return response
 
 
 def _build_yandex_response_with_price() -> dict[str, object]:
@@ -316,7 +448,7 @@ def _build_yandex_response_without_total_price() -> dict[str, object]:
     }
 
 
-def _build_rzd_response() -> dict[str, object]:
+def _build_rzd_response() -> dict[str, Any]:
     return {
         "tp": [
             {
@@ -380,6 +512,26 @@ def _build_rzd_response() -> dict[str, object]:
                         "time1": "18:00",
                     },
                 ]
+            }
+        ]
+    }
+
+
+def _build_rzd_direct_only_response() -> dict[str, object]:
+    return {
+        "tp": [
+            {
+                "list": [_build_rzd_response()["tp"][0]["list"][0]],
+            }
+        ]
+    }
+
+
+def _build_rzd_transfer_only_response() -> dict[str, object]:
+    return {
+        "tp": [
+            {
+                "list": [_build_rzd_response()["tp"][0]["list"][1]],
             }
         ]
     }

@@ -5,7 +5,7 @@ import logging
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -30,6 +30,8 @@ from app.services.search.contracts import (
 from app.utils.time_utils import timespan_to_minutes
 
 logger = logging.getLogger(__name__)
+
+RzdPayload = dict[str, Any]
 
 _TRANSFER_LEG_KEYS = ("details", "legs", "segments", "path")
 _TRANSFER_MARKER_KEYS = (
@@ -255,20 +257,21 @@ class RzdRouteSearchAdapter(RouteSearchPort):
             "code0": origin_code,
             "code1": destination_code,
             "dt0": criteria.travel_date.strftime("%d.%m.%Y"),
-            "md": 1 if (criteria.preferences.max_transfers or 0) > 0 else 0,
         }
 
-        response_data = await self._fetch_routes(params)
-
+        response_data = await self._fetch_route_payloads(
+            request_params=params,
+            include_transfers=(criteria.preferences.max_transfers or 0) > 0,
+        )
         if not response_data:
             logger.warning("No routes found or API error")
             return []
 
         locations_by_code = await self._load_locations_by_codes(
-            _collect_rzd_codes(response_data)
+            _collect_rzd_codes_from_payloads(response_data)
         )
-        routes = self._parse_routes_response(
-            response_data,
+        routes = self._collect_candidates_from_payloads(
+            payloads=response_data,
             requested_origin=requested_origin,
             requested_destination=requested_destination,
             requested_origin_code=origin_code,
@@ -282,6 +285,69 @@ class RzdRouteSearchAdapter(RouteSearchPort):
         )
 
         return routes
+
+    async def _fetch_route_payloads(
+        self,
+        *,
+        request_params: dict[str, Any],
+        include_transfers: bool,
+    ) -> list[RzdPayload]:
+        if not include_transfers:
+            return [await self._fetch_routes({**request_params, "md": 0})]
+
+        # `md=1` returns transfer routes, but does not reliably include direct ones,
+        # so transfer mode explicitly fetches both result sets.
+        request_variants = (
+            {**request_params, "md": 0},
+            {**request_params, "md": 1},
+        )
+        results = await asyncio.gather(
+            *(self._fetch_routes(params) for params in request_variants),
+            return_exceptions=True,
+        )
+
+        successful_payloads: list[RzdPayload] = []
+        errors: list[Exception] = []
+        for params, result in zip(request_variants, results, strict=True):
+            if isinstance(result, Exception):
+                logger.warning(
+                    "RZD API request failed md=%s error=%s",
+                    params["md"],
+                    result,
+                )
+                errors.append(result)
+                continue
+            successful_payloads.append(cast(RzdPayload, result))
+
+        if successful_payloads:
+            return successful_payloads
+        if errors:
+            raise errors[0]
+        return []
+
+    def _collect_candidates_from_payloads(
+        self,
+        *,
+        payloads: Sequence[RzdPayload],
+        requested_origin: Location | None,
+        requested_destination: Location | None,
+        requested_origin_code: str,
+        requested_destination_code: str,
+        locations_by_code: Mapping[str, Location],
+    ) -> list[RouteCandidate]:
+        routes: list[RouteCandidate] = []
+        for payload in payloads:
+            routes.extend(
+                self._parse_routes_response(
+                    payload,
+                    requested_origin=requested_origin,
+                    requested_destination=requested_destination,
+                    requested_origin_code=requested_origin_code,
+                    requested_destination_code=requested_destination_code,
+                    locations_by_code=locations_by_code,
+                )
+            )
+        return _dedupe_candidates_by_segment_ids(routes)
 
     def _parse_routes_response(
         self,
@@ -308,7 +374,7 @@ class RzdRouteSearchAdapter(RouteSearchPort):
             return []
 
         routes: list[RouteCandidate] = []
-        for route_data in tp_data[0].get("list", []):
+        for route_data in _iter_rzd_routes(response_data):
             try:
                 candidate = _build_rzd_candidate(
                     route_data=route_data,
@@ -407,9 +473,9 @@ def _build_rzd_provider_segments(
     return tuple(provider_segments)
 
 
-def _collect_rzd_codes(data: dict[str, Any]) -> tuple[str, ...]:
+def _collect_rzd_codes(payload: RzdPayload) -> tuple[str, ...]:
     codes: set[str] = set()
-    for route_data in data.get("tp", [{}])[0].get("list", []):
+    for route_data in _iter_rzd_routes(payload):
         raw_legs = _extract_rzd_raw_legs(route_data) or (route_data,)
         for raw_leg in raw_legs:
             origin_code = _extract_rzd_location_code(raw_leg, side=0)
@@ -419,6 +485,38 @@ def _collect_rzd_codes(data: dict[str, Any]) -> tuple[str, ...]:
             if destination_code:
                 codes.add(destination_code)
     return tuple(sorted(codes))
+
+
+def _collect_rzd_codes_from_payloads(payloads: Sequence[RzdPayload]) -> tuple[str, ...]:
+    codes: set[str] = set()
+    for payload in payloads:
+        codes.update(_collect_rzd_codes(payload))
+    return tuple(sorted(codes))
+
+
+def _dedupe_candidates_by_segment_ids(
+    candidates: Sequence[RouteCandidate],
+) -> list[RouteCandidate]:
+    deduped: list[RouteCandidate] = []
+    seen_segment_ids: set[tuple[object, ...]] = set()
+    for candidate in candidates:
+        dedupe_key = tuple(candidate.segment_ids)
+        if dedupe_key in seen_segment_ids:
+            continue
+        seen_segment_ids.add(dedupe_key)
+        deduped.append(candidate)
+    return deduped
+
+
+def _iter_rzd_routes(payload: RzdPayload) -> list[Mapping[str, Any]]:
+    tp_data = payload.get("tp", [])
+    if not tp_data:
+        return []
+    first_tp_item = tp_data[0]
+    if not isinstance(first_tp_item, dict):
+        return []
+    raw_routes = first_tp_item.get("list", [])
+    return [route for route in raw_routes if isinstance(route, dict)]
 
 
 def _extract_rzd_raw_legs(
