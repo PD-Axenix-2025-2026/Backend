@@ -6,7 +6,7 @@ from decimal import Decimal
 from app.api.query_parsers import parse_csv_enum_values
 from app.models.enums import TransportType
 from app.schemas.searches import SearchCreateRequest
-from app.services.models import (
+from app.services.search.contracts import (
     PassengerCounts,
     RouteSearchCriteria,
     RouteSearchPreferences,

@@ -18,15 +18,17 @@ from app.schemas.searches import (
     TransferFacetResponse,
     TransportTypeFacetResponse,
 )
-from app.services.models import (
+from app.services.search.results import (
     DecimalRange,
-    MoneySnapshot,
     RouteListView,
-    RouteSegmentSnapshot,
-    RouteSnapshot,
     SearchResultsPage,
     TransferFacet,
     TransportTypeFacet,
+)
+from app.services.search.store.models import (
+    MoneySnapshot,
+    RouteSegmentSnapshot,
+    RouteSnapshot,
 )
 
 
@@ -40,7 +42,11 @@ def build_route_summary_response(route: RouteSnapshot) -> RouteSummaryResponse:
         arrival_at=route.arrival_at,
         duration_minutes=route.duration_minutes,
         transfers=route.transfers,
-        total_price=build_money_response(route.total_price),
+        total_price=(
+            build_money_response(route.total_price)
+            if route.total_price is not None
+            else None
+        ),
     )
 
 
@@ -62,7 +68,9 @@ def build_route_segment_response(
         departure_at=segment.departure_at,
         arrival_at=segment.arrival_at,
         duration_minutes=segment.duration_minutes,
-        price=build_money_response(segment.price),
+        price=build_money_response(segment.price)
+        if segment.price is not None
+        else None,
         available_seats=segment.available_seats,
         source_system=segment.source_system,
         source_record_id=segment.source_record_id,

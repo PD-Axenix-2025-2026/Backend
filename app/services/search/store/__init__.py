@@ -1,0 +1,1 @@
+"""Search state storage."""

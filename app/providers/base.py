@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 
-from app.services.contracts import RouteCandidate, RouteSearchCriteria
+from app.services.search.contracts import RouteCandidate, RouteSearchCriteria
 
 
 class RouteProvider(ABC):

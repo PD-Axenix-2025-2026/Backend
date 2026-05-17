@@ -1,12 +1,13 @@
 import logging
 from collections.abc import Sequence
+from datetime import timedelta
 from uuid import UUID
 
 from sqlalchemy import Select, func, or_, select
 
 from app.models.route_segment import RouteSegment
 from app.repositories.base import BaseRepository
-from app.services.contracts import RouteCandidate, RouteSearchCriteria
+from app.services.search.contracts import RouteCandidate, RouteSearchCriteria
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,53 @@ class RouteSegmentRepository(BaseRepository):
             error_message="Failed to list route segments by ids count=%s",
             error_args=(len(segment_ids),),
             success_message="Route segments loaded result_count=%s",
+        )
+
+    async def list_active_for_planning(
+        self,
+        criteria: RouteSearchCriteria,
+        *,
+        planning_window_days: int,
+    ) -> list[RouteSegment]:
+        logger.debug(
+            (
+                "Listing active route segments for planning "
+                "travel_date=%s planning_window_days=%s transport_types=%s"
+            ),
+            criteria.travel_date,
+            planning_window_days,
+            self._serialize_transport_types(criteria),
+        )
+        statement: Select[tuple[RouteSegment]] = (
+            select(RouteSegment)
+            .where(func.date(RouteSegment.departure_at) >= criteria.travel_date)
+            .where(
+                func.date(RouteSegment.departure_at)
+                < criteria.travel_date + timedelta(days=planning_window_days)
+            )
+            .where(RouteSegment.is_active.is_(True))
+            .where(RouteSegment.valid_from <= func.now())
+            .where(
+                or_(
+                    RouteSegment.valid_to.is_(None),
+                    RouteSegment.valid_to >= func.now(),
+                )
+            )
+            .order_by(RouteSegment.departure_at.asc())
+        )
+        if criteria.transport_types:
+            statement = statement.where(
+                RouteSegment.transport_type.in_(criteria.transport_types)
+            )
+
+        return await self._load_segments(
+            statement=statement,
+            error_message=(
+                "Failed to list active route segments for planning "
+                "travel_date=%s planning_window_days=%s"
+            ),
+            error_args=(criteria.travel_date, planning_window_days),
+            success_message="Active route segments loaded result_count=%s",
         )
 
     def _build_direct_candidates_statement(

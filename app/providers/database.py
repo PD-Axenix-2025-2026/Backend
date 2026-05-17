@@ -2,7 +2,7 @@ import logging
 
 from app.providers.base import RouteProvider
 from app.repositories.route_segment_repository import RouteSegmentRepository
-from app.services.contracts import RouteCandidate, RouteSearchCriteria
+from app.services.search.contracts import RouteCandidate, RouteSearchCriteria
 
 logger = logging.getLogger(__name__)
 

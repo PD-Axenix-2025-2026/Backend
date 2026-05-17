@@ -3,7 +3,7 @@ from typing import Annotated, cast
 from fastapi import Depends, Request
 
 from app.core.container import AppContainer
-from app.services.use_cases import (
+from app.services.application.use_cases import (
     CreateCheckoutLinkUseCase,
     CreateSearchUseCase,
     GetRouteDetailUseCase,
