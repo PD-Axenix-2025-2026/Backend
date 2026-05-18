@@ -454,8 +454,8 @@ def _build_rzd_response() -> dict[str, Any]:
             {
                 "list": [
                     {
-                        "route0": "2000000",
-                        "route1": "2004000",
+                        "code0": "2000000",
+                        "code1": "2004000",
                         "station0": "Москва",
                         "station1": "Санкт-Петербург",
                         "date0": "14.05.2026",
@@ -471,8 +471,8 @@ def _build_rzd_response() -> dict[str, Any]:
                         "transfers": 1,
                         "segments": [
                             {
-                                "route0": "2000000",
-                                "route1": "2060615",
+                                "code0": "2000000",
+                                "code1": "2060615",
                                 "station0": "Москва",
                                 "station1": "Казань",
                                 "date0": "14.05.2026",
@@ -485,8 +485,8 @@ def _build_rzd_response() -> dict[str, Any]:
                                 "cars": [{"tariff": "5200", "freeSeats": 8}],
                             },
                             {
-                                "route0": "2060615",
-                                "route1": "2004000",
+                                "code0": "2060615",
+                                "code1": "2004000",
                                 "station0": "Казань",
                                 "station1": "Санкт-Петербург",
                                 "date0": "14.05.2026",
@@ -502,8 +502,8 @@ def _build_rzd_response() -> dict[str, Any]:
                     },
                     {
                         "transfers": 1,
-                        "route0": "2000000",
-                        "route1": "2004000",
+                        "code0": "2000000",
+                        "code1": "2004000",
                         "station0": "Москва",
                         "station1": "Санкт-Петербург",
                         "date0": "14.05.2026",
