@@ -2,7 +2,6 @@ import logging
 from uuid import UUID
 
 from sqlalchemy import Select, or_, select
-from sqlalchemy.orm import load_only
 
 from app.models.enums import LocationType
 from app.models.location import Location
@@ -11,29 +10,10 @@ from app.repositories.base import BaseRepository
 logger = logging.getLogger(__name__)
 
 
-LOCATION_READ_COLUMNS = (
-    Location.id,
-    Location.code,
-    Location.name,
-    Location.city_name,
-    Location.country_code,
-    Location.location_type,
-    Location.lat,
-    Location.lon,
-    Location.timezone,
-    Location.is_hub,
-    Location.parent_location_id,
-)
-
-
 class LocationRepository(BaseRepository):
     async def get_by_id(self, location_id: UUID) -> Location | None:
         logger.debug("Fetching location by id location_id=%s", location_id)
-        statement = (
-            select(Location)
-            .options(load_only(*LOCATION_READ_COLUMNS))
-            .where(Location.id == location_id)
-        )
+        statement = select(Location).where(Location.id == location_id)
         try:
             result = await self.session.execute(statement)
         except Exception:
@@ -68,7 +48,6 @@ class LocationRepository(BaseRepository):
         )
         statement: Select[tuple[Location]] = (
             select(Location)
-            .options(load_only(*LOCATION_READ_COLUMNS))
             .where(
                 or_(
                     Location.name.ilike(f"{prefix}%"),
