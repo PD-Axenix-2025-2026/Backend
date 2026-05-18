@@ -233,9 +233,9 @@ poetry run python -m app.scripts.seed_mock_data --base-date 2026-04-14
 2. Запустить скрипт заполнения таблицы locations информацией о локациях, взятой из внешних API:
 
 ```bash
-poetry run python -m app.scripts.import_rzd_and_yandex_locations --rzd-file app\data\rzd_locations.json \
-      --yandex-file app\data\yandex_rasp_locations.json \
-      --matches-file app\data\rzd_yandex_location_matches.json \
+poetry run python -m app.scripts.import_rzd_and_yandex_locations --rzd-file data\rzd_locations.json \
+      --yandex-file data\yandex_rasp_locations.json \
+      --matches-file data\rzd_yandex_location_matches.json \
       --import-db
 ```
 

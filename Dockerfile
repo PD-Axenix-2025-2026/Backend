@@ -13,6 +13,7 @@ COPY pyproject.toml poetry.lock README.md ./
 RUN poetry install --only main --no-root --no-interaction --no-ansi
 
 COPY app ./app
+COPY data ./data
 
 
 FROM base AS dev
