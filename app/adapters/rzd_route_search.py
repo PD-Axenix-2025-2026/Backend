@@ -643,6 +643,7 @@ def _extract_rzd_duration_minutes(
 
 def _extract_rzd_tariff(raw_leg: Mapping[str, Any]) -> Decimal | None:
     cars = raw_leg.get("cars")
+    # здесь может быть пусто в случае электричек
     if isinstance(cars, list) and cars:
         tariff = cars[0].get("tariff")
         if tariff is not None:
@@ -664,7 +665,6 @@ def _extract_rzd_available_seats(raw_leg: Mapping[str, Any]) -> int | None:
 
 def _extract_rzd_location_code(raw_leg: Mapping[str, Any], *, side: int) -> str | None:
     candidate_keys = (
-        f"route{side}",
         f"code{side}",
         "fromCode" if side == 0 else "whereCode",
         "code0" if side == 0 else "code1",

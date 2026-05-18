@@ -291,7 +291,7 @@ def _resolve_currency(routes: Sequence[RouteSnapshot]) -> str:
 
 def _passes_max_price_filter(route: RouteSnapshot, max_price: Decimal) -> bool:
     total_price = route.total_price
-    return total_price is not None and total_price.amount <= max_price
+    return total_price is None or total_price.amount <= max_price
 
 
 def _has_known_total_price(route: RouteSnapshot) -> bool:
