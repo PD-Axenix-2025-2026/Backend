@@ -123,7 +123,11 @@ def test_rzd_adapter_parses_direct_and_transfer_routes() -> None:
     assert isinstance(first_leg, ProviderRouteSegment)
     assert first_leg.origin_location.id == requested_origin.id
     assert first_leg.destination_location.id == hub.id
+    assert first_leg.departure_at.tzinfo is not None
+    assert first_leg.arrival_at.tzinfo is not None
     assert second_leg.destination_location.id == requested_destination.id
+    assert second_leg.departure_at.tzinfo is not None
+    assert second_leg.arrival_at.tzinfo is not None
 
 
 @pytest.mark.asyncio

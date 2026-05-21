@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, cast
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -543,15 +544,15 @@ def _build_rzd_provider_segment(
     is_first: bool,
     is_last: bool,
 ) -> ProviderRouteSegment | None:
-    departure_at = _parse_rzd_datetime(
+    departure_at_raw = _parse_rzd_datetime(
         date_value=raw_leg.get("date0"),
         time_value=raw_leg.get("time0"),
     )
-    arrival_at = _parse_rzd_datetime(
+    arrival_at_raw = _parse_rzd_datetime(
         date_value=raw_leg.get("date1"),
         time_value=raw_leg.get("time1"),
     )
-    if departure_at is None or arrival_at is None:
+    if departure_at_raw is None or arrival_at_raw is None:
         logger.debug("Skipping RZD leg because departure or arrival is missing")
         return None
 
@@ -577,6 +578,15 @@ def _build_rzd_provider_segment(
             destination_code,
         )
         return None
+
+    departure_at = _attach_location_timezone(
+        value=departure_at_raw,
+        timezone_name=origin_location.timezone,
+    )
+    arrival_at = _attach_location_timezone(
+        value=arrival_at_raw,
+        timezone_name=destination_location.timezone,
+    )
 
     segment_code = raw_leg.get("number")
     source_record_id = raw_leg.get("trainId") or raw_leg.get("number")
@@ -627,6 +637,23 @@ def _parse_rzd_datetime(
         return datetime.strptime(f"{date_value} {time_value}", "%d.%m.%Y %H:%M")
     except ValueError:
         return None
+
+
+def _attach_location_timezone(
+    *,
+    value: datetime,
+    timezone_name: str | None,
+) -> datetime:
+    if timezone_name is None:
+        return value.replace(tzinfo=UTC)
+    try:
+        return value.replace(tzinfo=ZoneInfo(timezone_name))
+    except ZoneInfoNotFoundError:
+        logger.warning(
+            "Unknown location timezone for RZD datetime normalization: %s",
+            timezone_name,
+        )
+        return value.replace(tzinfo=UTC)
 
 
 def _extract_rzd_duration_minutes(
