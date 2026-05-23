@@ -368,12 +368,12 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--origin-prefix",
-        default="Мос",
+        default="Москва",
         help="Autocomplete prefix for the origin location.",
     )
     parser.add_argument(
         "--destination-prefix",
-        default="Санкт",
+        default="Санкт-Петербург",
         help="Autocomplete prefix for the destination location.",
     )
     parser.add_argument(
