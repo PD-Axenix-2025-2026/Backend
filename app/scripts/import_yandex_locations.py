@@ -22,6 +22,7 @@ from datetime import datetime
 from typing import Any, cast
 
 import httpx
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import get_settings
@@ -423,6 +424,9 @@ class LocationDatabaseImporter:
         }
 
         async with session_factory() as session:
+            await session.execute(delete(Location))
+            await session.flush()
+
             for loc in locations:
                 try:
                     yandex_code = str(loc.get("yandex_code"))

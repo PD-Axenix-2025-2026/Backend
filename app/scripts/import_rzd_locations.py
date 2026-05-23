@@ -17,6 +17,7 @@ from datetime import datetime
 from typing import Any
 
 import httpx
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import get_settings
@@ -268,6 +269,9 @@ class RZDLocationImporter:
         }
 
         async with session_factory() as session:
+            await session.execute(delete(Location))
+            await session.flush()
+
             for location_data in locations:
                 try:
                     code = str(location_data.get("nodeId"))

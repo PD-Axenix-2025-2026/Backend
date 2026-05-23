@@ -14,6 +14,10 @@ from app.services.search.contracts import (
     SearchSortOption,
     SearchStatus,
 )
+from app.services.search.planner import (
+    UNKNOWN_PRICE_PENALTY,
+    get_sort_weight_profile,
+)
 from app.services.search.store.models import RouteSnapshot, SearchRecord, utc_now
 
 
@@ -166,7 +170,10 @@ def sort_routes(
 ) -> list[RouteSnapshot]:
     if sort == SearchSortOption.duration:
         return sorted(routes, key=_duration_sort_key)
-    return sorted(routes, key=_price_sort_key)
+    elif sort == SearchSortOption.price:
+        return sorted(routes, key=_price_sort_key)
+    else:
+        return sorted(routes, key=_balanced_sort_key)
 
 
 def build_route_list_views(
@@ -277,6 +284,25 @@ def _duration_sort_key(
         not _has_known_total_price(route),
         _known_total_price_amount(route),
         route.transfers,
+        route.departure_at,
+    )
+
+
+def _balanced_sort_key(
+    route: RouteSnapshot,
+) -> tuple[float, datetime]:
+    profile = get_sort_weight_profile(SearchSortOption.best)
+
+    duration_score = route.duration_minutes * profile.duration_weight
+    price_score = (
+        float(_known_total_price_amount(route)) * profile.price_weight
+        if _has_known_total_price(route)
+        else UNKNOWN_PRICE_PENALTY
+    )
+    transfers_score = route.transfers * profile.transfer_penalty
+
+    return (
+        duration_score + price_score + transfers_score,
         route.departure_at,
     )
 

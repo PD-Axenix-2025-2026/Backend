@@ -172,6 +172,88 @@ async def test_orchestrator_deduplicates_matching_transfer_routes_across_sources
     assert len(database_adapter.calls) == 1
 
 
+@pytest.mark.asyncio
+async def test_orchestrator_builds_graph_candidates_from_external_segments() -> None:
+    origin = build_location(code="ORI", name="Origin")
+    hub = build_location(code="HUB", name="Hub")
+    destination = build_location(code="DST", name="Destination")
+    criteria = build_search_criteria(
+        origin_id=origin.id,
+        origin_type=origin.location_type,
+        destination_id=destination.id,
+        destination_type=destination.location_type,
+        max_transfers=2,
+    )
+
+    first_leg = build_provider_segment(
+        origin=origin,
+        destination=hub,
+        transport_type=TransportType.plane,
+        departure_at=datetime(2026, 4, 14, 8, 0, tzinfo=MOSCOW_TZ),
+        arrival_at=datetime(2026, 4, 14, 9, 0, tzinfo=MOSCOW_TZ),
+        segment_code="S7 101",
+        carrier_name="S7",
+        carrier_code="S7",
+    )
+    second_leg = build_provider_segment(
+        origin=hub,
+        destination=destination,
+        transport_type=TransportType.train,
+        departure_at=datetime(2026, 4, 14, 10, 30, tzinfo=MOSCOW_TZ),
+        arrival_at=datetime(2026, 4, 14, 12, 0, tzinfo=MOSCOW_TZ),
+        segment_code="RZD 202",
+        carrier_name="Russian Railways",
+        carrier_code="RZD",
+    )
+    alt_first_leg = build_provider_segment(
+        origin=origin,
+        destination=hub,
+        transport_type=TransportType.plane,
+        departure_at=datetime(2026, 4, 14, 7, 30, tzinfo=MOSCOW_TZ),
+        arrival_at=datetime(2026, 4, 14, 8, 30, tzinfo=MOSCOW_TZ),
+        segment_code="SU 303",
+        carrier_name="Aeroflot",
+        carrier_code="SU",
+    )
+    alt_second_leg = build_provider_segment(
+        origin=hub,
+        destination=destination,
+        transport_type=TransportType.train,
+        departure_at=datetime(2026, 4, 14, 9, 45, tzinfo=MOSCOW_TZ),
+        arrival_at=datetime(2026, 4, 14, 11, 15, tzinfo=MOSCOW_TZ),
+        segment_code="RZD 404",
+        carrier_name="Russian Railways",
+        carrier_code="RZD",
+    )
+
+    external_adapter = _StubExternalAdapter(
+        results=[
+            build_candidate(
+                source="yandex_rasp_api",
+                transfers=1,
+                segment_ids=(first_leg.segment_id, second_leg.segment_id),
+                resolved_segments=(first_leg, second_leg),
+            ),
+            build_candidate(
+                source="rzd_api",
+                transfers=1,
+                segment_ids=(alt_first_leg.segment_id, alt_second_leg.segment_id),
+                resolved_segments=(alt_first_leg, alt_second_leg),
+            ),
+        ]
+    )
+
+    orchestrator = RouteSearchOrchestrator([external_adapter])
+    results = await orchestrator.search(criteria)
+
+    assert any(
+        candidate.source == "graph_search"
+        and candidate.segment_ids == (alt_first_leg.segment_id, second_leg.segment_id)
+        and candidate.transfers == 1
+        for candidate in results
+    )
+
+
 def _build_criteria(*, max_transfers: int | None) -> RouteSearchCriteria:
     origin = build_location(code="ORI", name="Origin")
     destination = build_location(code="DST", name="Destination")

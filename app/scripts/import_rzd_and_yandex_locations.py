@@ -12,6 +12,7 @@ import sys
 import uuid
 from typing import Any, cast
 
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import get_settings
@@ -261,6 +262,9 @@ class LocationMerger:
         }
 
         async with session_factory() as session:
+            await session.execute(delete(Location))
+            await session.flush()
+
             for loc in locations:
                 try:
                     # Проверяем, существует ли уже локация по rzd_code и yandex_code

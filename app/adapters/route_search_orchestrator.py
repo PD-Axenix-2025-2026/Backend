@@ -3,6 +3,7 @@ import logging
 from collections.abc import Iterable, Sequence
 from datetime import datetime
 from typing import cast
+from uuid import UUID
 
 from app.adapters.database_route_search import DatabaseRouteSearchAdapter
 from app.services.application.ports import RouteSearchPort
@@ -11,6 +12,10 @@ from app.services.search.contracts import (
     ResolvedRouteSegment,
     RouteCandidate,
     RouteSearchCriteria,
+)
+from app.services.search.planner import (
+    build_k_shortest_route_candidates,
+    build_planner_constraints,
 )
 
 logger = logging.getLogger(__name__)
@@ -129,6 +134,14 @@ def _combine_results(
 
         combined.extend(candidates)
 
+    if has_external_candidates and (criteria.preferences.max_transfers or 0) > 0:
+        combined.extend(
+            _build_graph_candidates(
+                criteria=criteria,
+                successful_results=successful_results,
+            )
+        )
+
     return _dedupe_candidates(combined)
 
 
@@ -202,3 +215,37 @@ def _build_segment_dedupe_key(
 
 def _normalize_datetime(value: datetime) -> str:
     return value.isoformat()
+
+
+def _build_graph_candidates(
+    *,
+    criteria: RouteSearchCriteria,
+    successful_results: Sequence[tuple[RouteSearchPort, list[RouteCandidate]]],
+) -> list[RouteCandidate]:
+    segments = _collect_resolved_segments(successful_results)
+    if not segments:
+        return []
+
+    return build_k_shortest_route_candidates(
+        criteria=criteria,
+        segments=segments,
+        constraints=build_planner_constraints(criteria),
+        source="graph_search",
+    )
+
+
+def _collect_resolved_segments(
+    successful_results: Sequence[tuple[RouteSearchPort, list[RouteCandidate]]],
+) -> list[ResolvedRouteSegment]:
+    segments_by_id: dict[UUID, ResolvedRouteSegment] = {}
+    for _, candidates in successful_results:
+        for candidate in candidates:
+            for segment in candidate.resolved_segments:
+                segments_by_id[_segment_id(segment)] = segment
+    return list(segments_by_id.values())
+
+
+def _segment_id(segment: ResolvedRouteSegment) -> UUID:
+    if isinstance(segment, ProviderRouteSegment):
+        return segment.segment_id
+    return segment.id
