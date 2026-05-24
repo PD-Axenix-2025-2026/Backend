@@ -7,9 +7,10 @@ import statistics
 import sys
 import time
 from collections import defaultdict
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 import httpx
 
