@@ -51,7 +51,7 @@ class LocationRepository(BaseRepository):
             .where(
                 or_(
                     Location.name.ilike(f"{prefix}%"),
-                    Location.city_name.ilike(f"{prefix}%"),
+                    # Location.city_name.ilike(f"{prefix}%"),
                     Location.code.ilike(f"{prefix}%"),
                 )
             )
