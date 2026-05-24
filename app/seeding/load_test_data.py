@@ -32,6 +32,8 @@ TRANSPORT_TYPE_ORDER = (
     TransportType.train,
     TransportType.bus,
 )
+GUARANTEED_DIRECT_ROUTES_PER_DAY = 100
+GUARANTEED_TRANSFER_ROUTES_PER_DAY = max(1, GUARANTEED_DIRECT_ROUTES_PER_DAY // 10)
 
 
 @dataclass(slots=True, frozen=True)
@@ -125,14 +127,11 @@ def build_load_test_data_bundle(
     rng = Random(random_seed)
     transfer_segments_target = target_segments - (target_segments // 2)
     transfer_segments_target -= transfer_segments_target % 2
-    guaranteed_direct_segments = days
-    direct_segments_target = (
-        target_segments - transfer_segments_target - guaranteed_direct_segments
-    )
+    guaranteed_direct_segments = days * GUARANTEED_DIRECT_ROUTES_PER_DAY
+    guaranteed_transfer_segments = days * GUARANTEED_TRANSFER_ROUTES_PER_DAY * 2
+    direct_segments_target = target_segments - transfer_segments_target - guaranteed_direct_segments - guaranteed_transfer_segments
     if direct_segments_target < 0:
-        raise ValueError(
-            "target_segments is too small to reserve one guaranteed Moscow-SPB route per day"
-        )
+        direct_segments_target = 0
     transfer_routes_target = transfer_segments_target // 2
 
     direct_day_quotas = _split_evenly(direct_segments_target, days)
@@ -159,198 +158,213 @@ def build_load_test_data_bundle(
             anchor_hour=7,
             salt=7,
         )
-        route_segments.append(
-            _build_route_segment(
-                key=(
-                    "guaranteed-direct",
-                    reference_date,
-                    day_index,
-                    origin_city.code,
-                    destination_city.code,
-                ),
-                origin=origin_city,
-                destination=destination_city,
-                carrier=_pick_carrier(
-                    carriers_by_transport_type,
-                    transport_type=TransportType.plane,
-                    day_index=day_index,
-                    route_index=0,
-                ),
-                transport_type=TransportType.plane,
-                segment_code=_segment_code(
-                    prefix="MOW-SPB",
-                    day_index=day_index,
-                    route_index=0,
-                    origin=origin_city,
-                    destination=destination_city,
-                ),
-                departure_at=guaranteed_departure_at,
-                arrival_at=guaranteed_departure_at + timedelta(minutes=95),
-                price_amount=Decimal("3990.00"),
-                available_seats=24,
-                source_record_id=_source_record_id(
-                    prefix="guaranteed-direct",
-                    base_date=reference_date,
-                    day_index=day_index,
-                    route_index=0,
-                    origin=origin_city,
-                    destination=destination_city,
-                    departure_at=guaranteed_departure_at,
-                ),
-                valid_from=reference_date - timedelta(days=30),
-            )
+        direct_guarantees = (
+            (0, TransportType.plane, Decimal("3990.00"), 95),
+            (1, TransportType.train, Decimal("2190.00"), 240),
         )
+        for route_index, (direct_route_index, transport_type, price_amount, duration_minutes) in enumerate(direct_guarantees):
+            departure_at = guaranteed_departure_at + timedelta(minutes=route_index * 47)
+            route_segments.append(
+                _build_route_segment(
+                    key=(
+                        "guaranteed-direct",
+                        reference_date,
+                        day_index,
+                        direct_route_index,
+                        origin_city.code,
+                        destination_city.code,
+                    ),
+                    origin=origin_city,
+                    destination=destination_city,
+                    carrier=_pick_carrier(
+                        carriers_by_transport_type,
+                        transport_type=transport_type,
+                        day_index=day_index,
+                        route_index=direct_route_index,
+                    ),
+                    transport_type=transport_type,
+                    segment_code=_segment_code(
+                        prefix="MOW-SPB",
+                        day_index=day_index,
+                        route_index=direct_route_index,
+                        origin=origin_city,
+                        destination=destination_city,
+                    ),
+                    departure_at=departure_at,
+                    arrival_at=departure_at + timedelta(minutes=duration_minutes),
+                    price_amount=price_amount,
+                    available_seats=24 - route_index * 2,
+                    source_record_id=_source_record_id(
+                        prefix="guaranteed-direct",
+                        base_date=reference_date,
+                        day_index=day_index,
+                        route_index=direct_route_index,
+                        origin=origin_city,
+                        destination=destination_city,
+                        departure_at=departure_at,
+                    ),
+                    valid_from=reference_date - timedelta(days=30),
+                )
+            )
 
-        # Guarantee at least one 1-transfer route MOW -> X -> SPB per day
-        try:
-            transfer_choice = None
-            for loc in transfer_pool:
-                if loc.id not in {origin_city.id, destination_city.id}:
-                    transfer_choice = loc
-                    break
-            if transfer_choice is not None:
-                transfer_location = transfer_choice
-                first_departure_at = _build_departure_at(
-                    travel_date=travel_date,
-                    day_index=day_index,
-                    route_index=0,
-                    window_minutes=TRANSFER_DEPARTURE_WINDOW_MINUTES,
-                    anchor_hour=6,
-                    salt=83,
-                )
-                first_duration_minutes = _build_transfer_leg_duration_minutes(
-                    rng,
-                    transport_type=TRANSPORT_TYPE_ORDER[(day_index + 1) % len(TRANSPORT_TYPE_ORDER)],
-                    day_index=day_index,
-                    route_index=0,
-                    leg_index=1,
-                )
-                first_arrival_at = first_departure_at + timedelta(minutes=first_duration_minutes)
-                layover_minutes = max(MIN_TRANSFER_LAYOVER_MINUTES, _build_layover_minutes(day_index=day_index, route_index=0))
-                second_departure_at = first_arrival_at + timedelta(minutes=layover_minutes)
-                second_duration_minutes = _build_transfer_leg_duration_minutes(
-                    rng,
-                    transport_type=TRANSPORT_TYPE_ORDER[(day_index + 2) % len(TRANSPORT_TYPE_ORDER)],
-                    day_index=day_index,
-                    route_index=0,
-                    leg_index=2,
-                )
-                second_arrival_at = second_departure_at + timedelta(minutes=second_duration_minutes)
-                chain_token = (
-                    f"{origin_city.code or str(origin_city.id)[:8]}->"
-                    f"{transfer_location.code or str(transfer_location.id)[:8]}->"
-                    f"{destination_city.code or str(destination_city.id)[:8]}"
-                )
-                route_segments.append(
-                    _build_route_segment(
-                        key=(
-                            "guaranteed-transfer",
-                            reference_date,
-                            day_index,
-                            "leg1",
-                            origin_city.code,
-                            transfer_location.code,
-                        ),
+        # Guarantee two 1-transfer routes MOW -> X -> SPB and MOW -> Y -> SPB per day.
+        transfer_candidates = [
+            location
+            for location in transfer_pool
+            if location.id not in {origin_city.id, destination_city.id}
+        ]
+        if not transfer_candidates:
+            raise ValueError(
+                "No intermediate locations are available to guarantee 1-transfer routes per day"
+            )
+        for transfer_route_index in range(GUARANTEED_TRANSFER_ROUTES_PER_DAY):
+            transfer_location = transfer_candidates[
+                transfer_route_index % len(transfer_candidates)
+            ]
+            first_transport_type = TRANSPORT_TYPE_ORDER[(day_index + transfer_route_index + 1) % len(TRANSPORT_TYPE_ORDER)]
+            second_transport_type = TRANSPORT_TYPE_ORDER[(day_index + transfer_route_index + 2) % len(TRANSPORT_TYPE_ORDER)]
+            first_departure_at = _build_departure_at(
+                travel_date=travel_date,
+                day_index=day_index,
+                route_index=transfer_route_index,
+                window_minutes=TRANSFER_DEPARTURE_WINDOW_MINUTES,
+                anchor_hour=6,
+                salt=83 + transfer_route_index,
+            )
+            first_duration_minutes = _build_transfer_leg_duration_minutes(
+                rng,
+                transport_type=first_transport_type,
+                day_index=day_index,
+                route_index=transfer_route_index,
+                leg_index=1,
+            )
+            first_arrival_at = first_departure_at + timedelta(minutes=first_duration_minutes)
+            layover_minutes = max(
+                MIN_TRANSFER_LAYOVER_MINUTES,
+                _build_layover_minutes(day_index=day_index, route_index=transfer_route_index),
+            )
+            second_departure_at = first_arrival_at + timedelta(minutes=layover_minutes)
+            second_duration_minutes = _build_transfer_leg_duration_minutes(
+                rng,
+                transport_type=second_transport_type,
+                day_index=day_index,
+                route_index=transfer_route_index,
+                leg_index=2,
+            )
+            second_arrival_at = second_departure_at + timedelta(minutes=second_duration_minutes)
+            chain_token = (
+                f"{origin_city.code or str(origin_city.id)[:8]}->"
+                f"{transfer_location.code or str(transfer_location.id)[:8]}->"
+                f"{destination_city.code or str(destination_city.id)[:8]}"
+            )
+            route_segments.append(
+                _build_route_segment(
+                    key=(
+                        "guaranteed-transfer",
+                        reference_date,
+                        day_index,
+                        transfer_route_index,
+                        "leg1",
+                        origin_city.code,
+                        transfer_location.code,
+                    ),
+                    origin=origin_city,
+                    destination=transfer_location,
+                    carrier=_pick_carrier(
+                        carriers_by_transport_type,
+                        transport_type=first_transport_type,
+                        day_index=day_index,
+                        route_index=transfer_route_index,
+                    ),
+                    transport_type=first_transport_type,
+                    segment_code=_segment_code(
+                        prefix="GTR1",
+                        day_index=day_index,
+                        route_index=transfer_route_index,
                         origin=origin_city,
                         destination=transfer_location,
-                        carrier=_pick_carrier(
-                            carriers_by_transport_type,
-                            transport_type=TRANSPORT_TYPE_ORDER[(day_index + 1) % len(TRANSPORT_TYPE_ORDER)],
-                            day_index=day_index,
-                            route_index=0,
-                        ),
-                        transport_type=TRANSPORT_TYPE_ORDER[(day_index + 1) % len(TRANSPORT_TYPE_ORDER)],
-                        segment_code=_segment_code(
-                            prefix="GTR1",
-                            day_index=day_index,
-                            route_index=0,
-                            origin=origin_city,
-                            destination=transfer_location,
-                        ),
+                    ),
+                    departure_at=first_departure_at,
+                    arrival_at=first_arrival_at,
+                    price_amount=_build_price_amount(
+                        transport_type=first_transport_type,
+                        day_index=day_index,
+                        route_index=transfer_route_index,
+                        transfer_leg=True,
+                    ),
+                    available_seats=_build_available_seats(
+                        transport_type=first_transport_type,
+                        route_index=transfer_route_index,
+                        transfer_leg=True,
+                    ),
+                    source_record_id=_source_record_id(
+                        prefix="guaranteed-transfer",
+                        base_date=reference_date,
+                        day_index=day_index,
+                        route_index=transfer_route_index,
+                        origin=origin_city,
+                        destination=transfer_location,
                         departure_at=first_departure_at,
-                        arrival_at=first_arrival_at,
-                        price_amount=_build_price_amount(
-                            transport_type=TRANSPORT_TYPE_ORDER[(day_index + 1) % len(TRANSPORT_TYPE_ORDER)],
-                            day_index=day_index,
-                            route_index=0,
-                            transfer_leg=True,
-                        ),
-                        available_seats=_build_available_seats(
-                            transport_type=TRANSPORT_TYPE_ORDER[(day_index + 1) % len(TRANSPORT_TYPE_ORDER)],
-                            route_index=0,
-                            transfer_leg=True,
-                        ),
-                        source_record_id=_source_record_id(
-                            prefix="guaranteed-transfer",
-                            base_date=reference_date,
-                            day_index=day_index,
-                            route_index=0,
-                            origin=origin_city,
-                            destination=transfer_location,
-                            departure_at=first_departure_at,
-                            chain_token=chain_token,
-                            extra="leg1",
-                        ),
-                        valid_from=reference_date - timedelta(days=30),
-                    )
+                        chain_token=chain_token,
+                        extra="leg1",
+                    ),
+                    valid_from=reference_date - timedelta(days=30),
                 )
-                route_segments.append(
-                    _build_route_segment(
-                        key=(
-                            "guaranteed-transfer",
-                            reference_date,
-                            day_index,
-                            "leg2",
-                            transfer_location.code,
-                            destination_city.code,
-                        ),
+            )
+            route_segments.append(
+                _build_route_segment(
+                    key=(
+                        "guaranteed-transfer",
+                        reference_date,
+                        day_index,
+                        transfer_route_index,
+                        "leg2",
+                        transfer_location.code,
+                        destination_city.code,
+                    ),
+                    origin=transfer_location,
+                    destination=destination_city,
+                    carrier=_pick_carrier(
+                        carriers_by_transport_type,
+                        transport_type=second_transport_type,
+                        day_index=day_index,
+                        route_index=transfer_route_index,
+                    ),
+                    transport_type=second_transport_type,
+                    segment_code=_segment_code(
+                        prefix="GTR2",
+                        day_index=day_index,
+                        route_index=transfer_route_index,
                         origin=transfer_location,
                         destination=destination_city,
-                        carrier=_pick_carrier(
-                            carriers_by_transport_type,
-                            transport_type=TRANSPORT_TYPE_ORDER[(day_index + 2) % len(TRANSPORT_TYPE_ORDER)],
-                            day_index=day_index,
-                            route_index=0,
-                        ),
-                        transport_type=TRANSPORT_TYPE_ORDER[(day_index + 2) % len(TRANSPORT_TYPE_ORDER)],
-                        segment_code=_segment_code(
-                            prefix="GTR2",
-                            day_index=day_index,
-                            route_index=0,
-                            origin=transfer_location,
-                            destination=destination_city,
-                        ),
+                    ),
+                    departure_at=second_departure_at,
+                    arrival_at=second_arrival_at,
+                    price_amount=_build_price_amount(
+                        transport_type=second_transport_type,
+                        day_index=day_index,
+                        route_index=transfer_route_index,
+                        transfer_leg=True,
+                    ),
+                    available_seats=_build_available_seats(
+                        transport_type=second_transport_type,
+                        route_index=transfer_route_index,
+                        transfer_leg=True,
+                    ),
+                    source_record_id=_source_record_id(
+                        prefix="guaranteed-transfer",
+                        base_date=reference_date,
+                        day_index=day_index,
+                        route_index=transfer_route_index,
+                        origin=transfer_location,
+                        destination=destination_city,
                         departure_at=second_departure_at,
-                        arrival_at=second_arrival_at,
-                        price_amount=_build_price_amount(
-                            transport_type=TRANSPORT_TYPE_ORDER[(day_index + 2) % len(TRANSPORT_TYPE_ORDER)],
-                            day_index=day_index,
-                            route_index=0,
-                            transfer_leg=True,
-                        ),
-                        available_seats=_build_available_seats(
-                            transport_type=TRANSPORT_TYPE_ORDER[(day_index + 2) % len(TRANSPORT_TYPE_ORDER)],
-                            route_index=0,
-                            transfer_leg=True,
-                        ),
-                        source_record_id=_source_record_id(
-                            prefix="guaranteed-transfer",
-                            base_date=reference_date,
-                            day_index=day_index,
-                            route_index=0,
-                            origin=transfer_location,
-                            destination=destination_city,
-                            departure_at=second_departure_at,
-                            chain_token=chain_token,
-                            extra="leg2",
-                        ),
-                        valid_from=reference_date - timedelta(days=30),
-                    )
+                        chain_token=chain_token,
+                        extra="leg2",
+                    ),
+                    valid_from=reference_date - timedelta(days=30),
                 )
-        except Exception:
-            # best effort: if something goes wrong while guaranteeing transfer chain,
-            # continue without failing the whole bundle generation
-            pass
+            )
 
         direct_count = direct_day_quotas[day_index]
         for route_index in range(direct_count):
@@ -606,7 +620,7 @@ def build_load_test_data_bundle(
                 )
             )
 
-    transfer_segments = transfer_routes_target * 2
+    transfer_segments = transfer_routes_target * 2 + guaranteed_transfer_segments
     return LoadTestBundle(
         route_segments=tuple(route_segments),
         base_date=reference_date,
@@ -614,7 +628,7 @@ def build_load_test_data_bundle(
         target_segments=target_segments,
         direct_segments=direct_segments_target + guaranteed_direct_segments,
         transfer_segments=transfer_segments,
-        transfer_routes=transfer_routes_target,
+        transfer_routes=transfer_routes_target + (days * GUARANTEED_TRANSFER_ROUTES_PER_DAY),
     )
 
 

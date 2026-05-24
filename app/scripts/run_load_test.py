@@ -195,89 +195,91 @@ async def _run_search_flow(
     iteration_index: int,
     progress_queue: asyncio.Queue[None],
 ) -> None:
-    payload = {
-        "origin": {
-            "id": origin_location["id"],
-            "type": origin_location["type"],
-        },
-        "destination": {
-            "id": destination_location["id"],
-            "type": destination_location["type"],
-        },
-        "date": travel_date.isoformat(),
-        "passengers": {"adults": 1, "children": 0, "infants": 0},
-        "transport_types": [transport_type.value for transport_type in config.transport_types],
-        "preferences": {
-            "sort": config.sort,
-            "max_transfers": config.max_transfers,
-        },
-    }
-
-    create_response = await _timed_request(
-        metrics,
-        "create_search",
-        client.post,
-        "/api/searches",
-        json=payload,
-    )
-    create_response.raise_for_status()
-    search_id = create_response.json()["search_id"]
-    poll_after_ms = int(create_response.json().get("poll_after_ms", config.poll_interval_ms))
-
-    route_id: str | None = None
-    for _ in range(config.poll_attempts):
-        results_response = await _timed_request(
-            metrics,
-            "poll_results",
-            client.get,
-            f"/api/searches/{search_id}/results",
-            params={
-                "last_update": 0,
+    try:
+        payload = {
+            "origin": {
+                "id": origin_location["id"],
+                "type": origin_location["type"],
+            },
+            "destination": {
+                "id": destination_location["id"],
+                "type": destination_location["type"],
+            },
+            "date": travel_date.isoformat(),
+            "passengers": {"adults": 1, "children": 0, "infants": 0},
+            "transport_types": [transport_type.value for transport_type in config.transport_types],
+            "preferences": {
                 "sort": config.sort,
-                "transport_types": ",".join(
-                    transport_type.value for transport_type in config.transport_types
-                ),
-                "limit": config.results_limit,
-                "offset": 0,
                 "max_transfers": config.max_transfers,
             },
-        )
-        results_response.raise_for_status()
-        results_body = results_response.json()
-        items = results_body.get("items", [])
-        if results_body.get("is_complete") and items:
-            route_id = items[0]["route_id"]
-            break
-        await asyncio.sleep(poll_after_ms / 1000)
+        }
 
-    if route_id is None:
-        raise RuntimeError(
-            "Search did not complete after "
-            f"{config.poll_attempts} polls for user={user_index} iteration={iteration_index}"
-        )
-
-    detail_response = await _timed_request(
-        metrics,
-        "route_detail",
-        client.get,
-        f"/api/routes/{route_id}",
-    )
-    detail_response.raise_for_status()
-
-    if config.include_checkout:
-        checkout_response = await _timed_request(
+        create_response = await _timed_request(
             metrics,
-            "checkout_link",
+            "create_search",
             client.post,
-            f"/api/routes/{route_id}/checkout-link",
-            json={"provider_offer_id": None},
+            "/api/searches",
+            json=payload,
         )
-        checkout_response.raise_for_status()
-    # signal scenario completion for progress monitoring
-    try:
-        progress_queue.put_nowait(None)
-    except Exception:
-        pass
+        create_response.raise_for_status()
+        search_id = create_response.json()["search_id"]
+        poll_after_ms = int(create_response.json().get("poll_after_ms", config.poll_interval_ms))
+
+        route_id: str | None = None
+        for _ in range(config.poll_attempts):
+            results_response = await _timed_request(
+                metrics,
+                "poll_results",
+                client.get,
+                f"/api/searches/{search_id}/results",
+                params={
+                    "last_update": 0,
+                    "sort": config.sort,
+                    "transport_types": ",".join(
+                        transport_type.value for transport_type in config.transport_types
+                    ),
+                    "limit": config.results_limit,
+                    "offset": 0,
+                    "max_transfers": config.max_transfers,
+                },
+            )
+            results_response.raise_for_status()
+            results_body = results_response.json()
+            items = results_body.get("items", [])
+            if results_body.get("is_complete") and items:
+                route_id = items[0]["route_id"]
+                break
+            await asyncio.sleep(poll_after_ms / 1000)
+
+        if route_id is None:
+            raise RuntimeError(
+                "Search did not complete after "
+                f"{config.poll_attempts} polls for user={user_index} iteration={iteration_index}"
+            )
+
+        detail_response = await _timed_request(
+            metrics,
+            "route_detail",
+            client.get,
+            f"/api/routes/{route_id}",
+        )
+        detail_response.raise_for_status()
+
+        if config.include_checkout:
+            checkout_response = await _timed_request(
+                metrics,
+                "checkout_link",
+                client.post,
+                f"/api/routes/{route_id}/checkout-link",
+                json={"provider_offer_id": None},
+            )
+            checkout_response.raise_for_status()
+    finally:
+        # Signal scenario completion for progress monitoring even when the flow fails.
+        try:
+            progress_queue.put_nowait(None)
+        except Exception:
+            pass
 
 async def _resolve_locations(
     client: httpx.AsyncClient,
