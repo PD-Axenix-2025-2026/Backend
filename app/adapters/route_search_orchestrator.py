@@ -46,9 +46,6 @@ class RouteSearchOrchestrator(RouteSearchPort):
         """
         Запускает поиск по всем адаптерам (или выбранным) параллельно
         и возвращает объединённый список результатов.
-
-        ВНИМАНИЕ: сейчас результаты просто конкатенируются в один список.
-        Позже нужно будет реализовать полноценный мерж.
         """
         selected_adapters = list(adapters) if adapters is not None else self._adapters
 
