@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import sys
 import random
 import statistics
+import sys
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -14,7 +14,7 @@ from typing import Any
 import httpx
 
 from app.core.config import get_settings
-from app.models.enums import LocationType, TransportType
+from app.models.enums import TransportType
 
 
 @dataclass(slots=True, frozen=True)
@@ -83,7 +83,8 @@ async def main() -> None:
         raise SystemExit(1) from exc
     except httpx.TimeoutException as exc:
         print(
-            f"Load test failed: request timed out while connecting to {config.base_url}",
+            "Load test failed: request timed out while connecting to "
+            f"{config.base_url}",
             file=sys.stderr,
         )
         raise SystemExit(1) from exc
@@ -263,7 +264,8 @@ async def _run_search_flow(
         if route_id is None:
             raise RuntimeError(
                 "Search did not complete after "
-                f"{config.poll_attempts} polls for user={user_index} iteration={iteration_index}"
+                f"{config.poll_attempts} polls for user={user_index} "
+                f"iteration={iteration_index}"
             )
 
         detail_response = await _timed_request(

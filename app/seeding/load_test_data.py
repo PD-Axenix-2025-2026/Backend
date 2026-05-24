@@ -4,7 +4,7 @@ from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 from random import Random
 
 from sqlalchemy import delete, select
@@ -225,7 +225,8 @@ def build_load_test_data_bundle(
         ]
         if not transfer_candidates:
             raise ValueError(
-                "No intermediate locations are available to guarantee 1-transfer routes per day"
+                "No intermediate locations are available to guarantee "
+                "1-transfer routes per day"
             )
         for transfer_route_index in range(GUARANTEED_TRANSFER_ROUTES_PER_DAY):
             transfer_location = transfer_candidates[
