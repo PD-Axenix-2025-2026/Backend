@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from decimal import Decimal
 
@@ -30,6 +31,16 @@ class _StubExternalAdapter:
     async def search(self, criteria: RouteSearchCriteria) -> list[RouteCandidate]:
         self.calls.append(criteria)
         return list(self._results)
+
+
+class _DelayedStubExternalAdapter(_StubExternalAdapter):
+    def __init__(self, results: list[RouteCandidate], delay_seconds: float) -> None:
+        super().__init__(results)
+        self._delay_seconds = delay_seconds
+
+    async def search(self, criteria: RouteSearchCriteria) -> list[RouteCandidate]:
+        await asyncio.sleep(self._delay_seconds)
+        return await super().search(criteria)
 
 
 class _StubDatabaseAdapter(DatabaseRouteSearchAdapter):
@@ -106,6 +117,27 @@ async def test_orchestrator_keeps_db_routes_when_external_empty() -> None:
     ]
     assert len(external_adapter.calls) == 1
     assert len(database_adapter.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_search_batches_yields_fast_adapter_first() -> None:
+    criteria = _build_criteria(max_transfers=0)
+    fast_candidate = build_candidate(source="yandex_rasp_api", transfers=0)
+    slow_candidate = build_candidate(source="rzd_api", transfers=0)
+    orchestrator = RouteSearchOrchestrator(
+        [
+            _DelayedStubExternalAdapter([slow_candidate], delay_seconds=0.05),
+            _DelayedStubExternalAdapter([fast_candidate], delay_seconds=0),
+        ]
+    )
+
+    batches = [batch async for batch in orchestrator.search_batches(criteria)]
+
+    assert batches[0].is_final is False
+    assert [candidate.source for candidate in batches[0].candidates] == [
+        "yandex_rasp_api"
+    ]
+    assert batches[-1].is_final is True
 
 
 @pytest.mark.asyncio

@@ -76,6 +76,12 @@ class RouteCandidate:
 
 
 @dataclass(slots=True, frozen=True)
+class RouteCandidateBatch:
+    candidates: tuple[RouteCandidate, ...]
+    is_final: bool = False
+
+
+@dataclass(slots=True, frozen=True)
 class ProviderRouteSegment:
     segment_id: UUID
     transport_type: TransportType

@@ -1,12 +1,9 @@
 from enum import StrEnum
-from typing import TypeVar
 
 from fastapi import HTTPException
 
-EnumT = TypeVar("EnumT", bound=StrEnum)
 
-
-def parse_csv_enum_values(
+def parse_csv_enum_values[EnumT: StrEnum](
     raw_value: str | None,
     *,
     enum_type: type[EnumT],

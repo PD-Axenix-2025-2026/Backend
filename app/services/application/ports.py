@@ -45,6 +45,12 @@ class SearchStateStorePort(Protocol):
         routes: list[RouteSnapshot],
     ) -> SearchRecord: ...
 
+    async def append_routes(
+        self,
+        search_id: UUID,
+        routes: list[RouteSnapshot],
+    ) -> SearchRecord: ...
+
     async def mark_failed(
         self,
         search_id: UUID,
@@ -54,3 +60,15 @@ class SearchStateStorePort(Protocol):
     async def get_search(self, search_id: UUID) -> SearchRecord: ...
 
     async def get_route(self, route_id: UUID) -> tuple[SearchRecord, RouteSnapshot]: ...
+
+
+class SearchResultsCachePort(Protocol):
+    async def get(
+        self, criteria: RouteSearchCriteria
+    ) -> list[RouteSnapshot] | None: ...
+
+    async def set(
+        self,
+        criteria: RouteSearchCriteria,
+        routes: list[RouteSnapshot],
+    ) -> None: ...

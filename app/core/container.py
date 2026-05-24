@@ -22,6 +22,7 @@ from app.services.application.use_cases import (
     ListLocationsUseCase,
     RunSearchUseCase,
 )
+from app.services.search.cache import RedisSearchResultsCache
 from app.services.search.store.memory import InMemorySearchStore
 from app.services.search.validation import SearchCriteriaValidator
 
@@ -37,6 +38,7 @@ class AppContainer:
     redis_client: Redis | None = None
     rzd_config: RzdConfig = field(default_factory=RzdConfig)
     search_store: InMemorySearchStore = field(default_factory=InMemorySearchStore)
+    search_results_cache: RedisSearchResultsCache | None = field(init=False)
     location_reader: SqlAlchemyLocationReadAdapter = field(init=False)
     route_segment_reader: SqlAlchemyRouteSegmentReadAdapter = field(init=False)
     route_search: RouteSearchOrchestrator = field(init=False)
@@ -52,6 +54,14 @@ class AppContainer:
         self.location_reader = SqlAlchemyLocationReadAdapter(self.session_factory)
         self.route_segment_reader = SqlAlchemyRouteSegmentReadAdapter(
             self.session_factory
+        )
+        self.search_results_cache = (
+            RedisSearchResultsCache(
+                self.redis_client,
+                ttl_seconds=self.settings.search_cache_ttl_seconds,
+            )
+            if self.redis_client is not None
+            else None
         )
 
         used_adapters: list[RouteSearchPort] = []
@@ -88,6 +98,7 @@ class AppContainer:
             route_search_port=self.route_search,
             route_segment_reader=self.route_segment_reader,
             search_state_store=self.search_store,
+            results_cache=self.search_results_cache,
         )
         self.search_runtime_coordinator = SearchRuntimeCoordinator(
             run_search_use_case=run_search_use_case,
@@ -101,6 +112,7 @@ class AppContainer:
             validator=validator,
             search_state_store=self.search_store,
             runtime_coordinator=self.search_runtime_coordinator,
+            results_cache=self.search_results_cache,
         )
         self.get_search_results_use_case = GetSearchResultsUseCase(
             search_state_store=self.search_store,

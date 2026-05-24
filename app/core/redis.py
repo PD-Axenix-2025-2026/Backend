@@ -1,5 +1,4 @@
 import logging
-from typing import cast
 
 from redis.asyncio import Redis
 
@@ -14,10 +13,12 @@ def build_redis_client(settings: Settings) -> Redis | None:
         return None
 
     logger.info("Creating Redis client from configured URL")
-    return cast(
-        Redis,
-        Redis.from_url(settings.redis_url, encoding="utf-8", decode_responses=True),
+    redis_client: Redis = Redis.from_url(
+        settings.redis_url,
+        encoding="utf-8",
+        decode_responses=True,
     )
+    return redis_client
 
 
 async def dispose_redis_client(redis_client: Redis | None) -> None:

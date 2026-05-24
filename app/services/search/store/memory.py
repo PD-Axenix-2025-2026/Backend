@@ -14,6 +14,7 @@ from app.services.search.store.logging import (
     log_search_completed,
     log_search_created,
     log_search_failed,
+    log_search_partial,
     log_search_requested,
 )
 from app.services.search.store.models import (
@@ -27,6 +28,8 @@ from app.services.search.store.operations import (
     cleanup_expired_searches,
     create_pending_record,
     index_routes,
+    merge_routes,
+    preserve_published_route_ids,
     require_active_search,
     require_indexed_search_id,
     require_route,
@@ -66,13 +69,35 @@ class InMemorySearchStore:
             self._cleanup_expired_locked()
             record = self._require_active_search_locked(search_id)
             unindex_routes(self._route_index, record.routes)
-            record.mark_complete(routes=tuple(routes), updated_at=utc_now())
+            final_routes = preserve_published_route_ids(record.routes, tuple(routes))
+            record.mark_complete(routes=final_routes, updated_at=utc_now())
             index_routes(
                 self._route_index,
                 search_id=search_id,
                 routes=record.routes,
             )
             log_search_completed(search_id=search_id, record=record)
+            return record
+
+    async def append_routes(
+        self,
+        search_id: UUID,
+        routes: list[RouteSnapshot],
+    ) -> SearchRecord:
+        async with self._lock:
+            self._cleanup_expired_locked()
+            record = self._require_active_search_locked(search_id)
+            if not routes:
+                return record
+            unindex_routes(self._route_index, record.routes)
+            merged_routes = merge_routes(record.routes, tuple(routes))
+            record.append_routes(routes=merged_routes, updated_at=utc_now())
+            index_routes(
+                self._route_index,
+                search_id=search_id,
+                routes=record.routes,
+            )
+            log_search_partial(search_id=search_id, record=record)
             return record
 
     async def mark_failed(

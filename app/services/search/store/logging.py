@@ -32,6 +32,15 @@ def log_search_completed(*, search_id: UUID, record: SearchRecord) -> None:
     )
 
 
+def log_search_partial(*, search_id: UUID, record: SearchRecord) -> None:
+    logger.info(
+        "Search record updated with partial routes route_count=%s last_update=%s",
+        len(record.routes),
+        record.last_update,
+        extra=_search_log_extra(search_id),
+    )
+
+
 def log_search_failed(*, search_id: UUID, error_message: str) -> None:
     logger.error(
         "Search record marked failed error_message=%s",
@@ -105,5 +114,6 @@ __all__ = [
     "log_search_completed",
     "log_search_created",
     "log_search_failed",
+    "log_search_partial",
     "log_search_requested",
 ]

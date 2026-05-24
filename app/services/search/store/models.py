@@ -98,6 +98,18 @@ class SearchRecord:
         self.last_update += 1
         self.error_message = None
 
+    def append_routes(
+        self,
+        *,
+        routes: tuple[RouteSnapshot, ...],
+        updated_at: datetime,
+    ) -> None:
+        self.routes = routes
+        self.status = SearchStatus.partial
+        self.updated_at = updated_at
+        self.last_update += 1
+        self.error_message = None
+
     def mark_failed(
         self,
         *,

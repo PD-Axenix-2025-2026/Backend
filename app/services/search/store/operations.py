@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import datetime
 from uuid import UUID
 
@@ -87,6 +88,40 @@ def index_routes(
         route_index[route.route_id] = search_id
 
 
+def merge_routes(
+    existing_routes: tuple[RouteSnapshot, ...],
+    new_routes: tuple[RouteSnapshot, ...],
+) -> tuple[RouteSnapshot, ...]:
+    routes_by_key = {_route_snapshot_key(route): route for route in existing_routes}
+    ordered_keys = list(routes_by_key)
+
+    for route in new_routes:
+        route_key = _route_snapshot_key(route)
+        if route_key not in routes_by_key:
+            ordered_keys.append(route_key)
+        routes_by_key[route_key] = route
+
+    return tuple(routes_by_key[route_key] for route_key in ordered_keys)
+
+
+def preserve_published_route_ids(
+    existing_routes: tuple[RouteSnapshot, ...],
+    final_routes: tuple[RouteSnapshot, ...],
+) -> tuple[RouteSnapshot, ...]:
+    published_route_ids = {
+        _route_snapshot_key(route): route.route_id for route in existing_routes
+    }
+    preserved_routes: list[RouteSnapshot] = []
+    for route in final_routes:
+        route_key = _route_snapshot_key(route)
+        published_route_id = published_route_ids.get(route_key)
+        if published_route_id is None:
+            preserved_routes.append(route)
+            continue
+        preserved_routes.append(replace(route, route_id=published_route_id))
+    return tuple(preserved_routes)
+
+
 def unindex_routes(
     route_index: dict[UUID, UUID],
     routes: tuple[RouteSnapshot, ...],
@@ -112,11 +147,27 @@ def is_expired(record: SearchRecord) -> bool:
     return record.expires_at <= utc_now()
 
 
+def _route_snapshot_key(route: RouteSnapshot) -> tuple[object, ...]:
+    return tuple(
+        (
+            segment.origin_id,
+            segment.destination_id,
+            segment.departure_at.isoformat(),
+            segment.arrival_at.isoformat(),
+            segment.transport_type.value,
+            segment.segment_code,
+        )
+        for segment in route.segments
+    )
+
+
 __all__ = [
     "cleanup_expired_searches",
     "create_pending_record",
     "index_routes",
     "is_expired",
+    "merge_routes",
+    "preserve_published_route_ids",
     "remove_search",
     "require_active_search",
     "require_indexed_search_id",

@@ -1,10 +1,9 @@
 import asyncio
 import logging
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import AsyncIterator, Iterable, Sequence
 from datetime import datetime
 from math import inf
-from typing import cast
 from uuid import UUID
 
 from app.adapters.database_route_search import DatabaseRouteSearchAdapter
@@ -13,6 +12,7 @@ from app.services.search.contracts import (
     ProviderRouteSegment,
     ResolvedRouteSegment,
     RouteCandidate,
+    RouteCandidateBatch,
     RouteSearchCriteria,
 )
 from app.services.search.planner import (
@@ -83,6 +83,17 @@ class RouteSearchOrchestrator(RouteSearchPort):
         Запускает поиск по всем адаптерам (или выбранным) параллельно
         и возвращает объединённый список результатов.
         """
+        final_candidates: list[RouteCandidate] = []
+        async for batch in self.search_batches(criteria, adapters=adapters):
+            if batch.is_final:
+                final_candidates = list(batch.candidates)
+        return final_candidates
+
+    async def search_batches(
+        self,
+        criteria: RouteSearchCriteria,
+        adapters: Iterable[RouteSearchPort] | None = None,
+    ) -> AsyncIterator[RouteCandidateBatch]:
         selected_adapters = list(adapters) if adapters is not None else self._adapters
 
         if not selected_adapters:
@@ -92,32 +103,61 @@ class RouteSearchOrchestrator(RouteSearchPort):
             criteria=criteria,
             adapters=selected_adapters,
         )
-        tasks = [adapter.search(criteria) for adapter in selected_adapters]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        tasks_by_adapter: dict[asyncio.Task[list[RouteCandidate]], RouteSearchPort] = {
+            asyncio.create_task(adapter.search(criteria)): adapter
+            for adapter in selected_adapters
+        }
+        adapter_order = {
+            id(adapter): index for index, adapter in enumerate(selected_adapters)
+        }
 
         successful_results: list[tuple[RouteSearchPort, list[RouteCandidate]]] = []
         errors: list[Exception] = []
+        has_external_adapters = any(
+            not _is_database_adapter(adapter) for adapter in selected_adapters
+        )
 
-        for adapter, result in zip(selected_adapters, results, strict=True):
-            if isinstance(result, Exception):
-                logger.error(
-                    "Route search adapter failed: %s, error=%s",
-                    adapter.__class__.__name__,
-                    result,
+        pending_tasks = set(tasks_by_adapter)
+        while pending_tasks:
+            done_tasks, pending_tasks = await asyncio.wait(
+                pending_tasks,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in done_tasks:
+                adapter = tasks_by_adapter[task]
+                try:
+                    candidates = task.result()
+                except Exception as exc:
+                    logger.error(
+                        "Route search adapter failed: %s, error=%s",
+                        adapter.__class__.__name__,
+                        exc,
+                    )
+                    errors.append(exc)
+                    continue
+
+                visible_candidates = _filter_partial_candidates(
+                    adapter=adapter,
+                    candidates=candidates,
+                    has_external_adapters=has_external_adapters,
+                    criteria=criteria,
                 )
-                errors.append(result)
-            else:
-                successful_results.append((adapter, cast(list[RouteCandidate], result)))
+                successful_results.append((adapter, candidates))
+                if visible_candidates:
+                    yield RouteCandidateBatch(candidates=tuple(visible_candidates))
 
         combined = _combine_results(
             criteria=criteria,
-            successful_results=successful_results,
+            successful_results=sorted(
+                successful_results,
+                key=lambda item: adapter_order[id(item[0])],
+            ),
         )
 
         if not combined and errors:
             raise RouteSearchOrchestratorError("All route search adapters failed")
 
-        return combined
+        yield RouteCandidateBatch(candidates=tuple(combined), is_final=True)
 
 
 def _select_adapters_for_criteria(
@@ -180,6 +220,22 @@ def _combine_results(
 
 def _is_database_adapter(adapter: RouteSearchPort) -> bool:
     return isinstance(adapter, DatabaseRouteSearchAdapter)
+
+
+def _filter_partial_candidates(
+    *,
+    adapter: RouteSearchPort,
+    candidates: Sequence[RouteCandidate],
+    has_external_adapters: bool,
+    criteria: RouteSearchCriteria,
+) -> list[RouteCandidate]:
+    if (
+        has_external_adapters
+        and _is_database_adapter(adapter)
+        and (criteria.preferences.max_transfers or 0) > 0
+    ):
+        return [candidate for candidate in candidates if candidate.transfers > 0]
+    return list(candidates)
 
 
 def _dedupe_candidates(candidates: Sequence[RouteCandidate]) -> list[RouteCandidate]:

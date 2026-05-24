@@ -19,10 +19,11 @@ def build_search_handle(
     *,
     search_id: UUID,
     expires_at: datetime,
+    status: SearchStatus = SearchStatus.pending,
 ) -> SearchHandle:
     return SearchHandle(
         search_id=search_id,
-        status=SearchStatus.pending,
+        status=status,
         results_url=f"{settings.api_prefix}/searches/{search_id}/results",
         poll_after_ms=settings.search_poll_after_ms,
         expires_at=expires_at,

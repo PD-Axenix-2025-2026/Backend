@@ -1,31 +1,102 @@
-from __future__ import annotations
-
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from datetime import date, timedelta
 from decimal import Decimal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
+from app.core.config import Settings
 from app.models.enums import LocationType, TransportType
+from app.services.application.use_cases import CreateSearchUseCase, RunSearchUseCase
 from app.services.search.contracts import (
+    RouteCandidate,
+    RouteCandidateBatch,
     RouteSearchCriteria,
     SearchResultsQuery,
     SearchSortOption,
     SearchStatus,
 )
+from app.services.search.snapshot_builder import build_route_snapshot
 from app.services.search.store.memory import InMemorySearchStore
-from app.services.search.store.models import SearchNotFoundError, utc_now
-from app.services.search.validation import SearchValidationError
+from app.services.search.store.models import RouteSnapshot, SearchNotFoundError, utc_now
+from app.services.search.validation import (
+    SearchCriteriaValidator,
+    SearchValidationError,
+)
 
 from tests.support.search_service import (
+    FakeLocationReader,
+    FakeRouteAggregationService,
+    FakeRouteSegmentReader,
     SearchFixture,
     build_location,
     build_search_fixture,
     build_search_service,
     create_completed_search,
 )
+
+
+class _FakeRuntimeCoordinator:
+    def __init__(self) -> None:
+        self.dispatch_calls: list[RouteSearchCriteria] = []
+
+    def dispatch(
+        self,
+        *,
+        search_id: UUID,
+        criteria: RouteSearchCriteria,
+    ) -> None:
+        self.dispatch_calls.append(criteria)
+
+
+class _FakeSearchResultsCache:
+    def __init__(self, routes: list[RouteSnapshot] | None = None) -> None:
+        self._routes = routes
+        self.get_calls: list[RouteSearchCriteria] = []
+        self.set_calls: list[tuple[RouteSearchCriteria, list[RouteSnapshot]]] = []
+
+    async def get(self, criteria: RouteSearchCriteria) -> list[RouteSnapshot] | None:
+        self.get_calls.append(criteria)
+        return self._routes
+
+    async def set(
+        self,
+        criteria: RouteSearchCriteria,
+        routes: list[RouteSnapshot],
+    ) -> None:
+        self.set_calls.append((criteria, routes))
+
+
+class _ControlledBatchRouteSearch:
+    def __init__(
+        self,
+        first_batch: list[RouteCandidate],
+        final_batch: list[RouteCandidate],
+    ) -> None:
+        self.first_batch = first_batch
+        self.final_batch = final_batch
+        self.partial_published = asyncio.Event()
+        self.release_final = asyncio.Event()
+
+    async def search(
+        self,
+        criteria: RouteSearchCriteria,
+    ) -> list[RouteCandidate]:
+        return self.final_batch
+
+    async def search_batches(
+        self,
+        criteria: RouteSearchCriteria,
+    ) -> AsyncIterator[RouteCandidateBatch]:
+        yield RouteCandidateBatch(candidates=tuple(self.first_batch))
+        self.partial_published.set()
+        await self.release_final.wait()
+        yield RouteCandidateBatch(
+            candidates=tuple(self.final_batch),
+            is_final=True,
+        )
 
 
 @pytest_asyncio.fixture
@@ -165,3 +236,178 @@ async def test_search_store_drops_expired_searches() -> None:
 
     with pytest.raises(SearchNotFoundError):
         await store.get_search(search_id)
+
+
+@pytest.mark.asyncio
+async def test_search_store_appends_partial_routes(
+    search_fixture: SearchFixture,
+) -> None:
+    store = InMemorySearchStore()
+    search_id = uuid4()
+    await store.create_search(
+        search_id=search_id,
+        criteria=search_fixture.criteria,
+        expires_at=utc_now() + timedelta(seconds=60),
+    )
+    route = build_route_snapshot(
+        search_id=search_id,
+        candidate=RouteCandidate(
+            source="database",
+            segment_ids=(search_fixture.plane_segment.id,),
+            total_price=search_fixture.plane_segment.price_amount,
+            total_duration_minutes=search_fixture.plane_segment.duration_minutes,
+            transfers=0,
+        ),
+        segments=(search_fixture.plane_segment,),
+    )
+
+    record = await store.append_routes(search_id=search_id, routes=[route])
+    indexed_record, indexed_route = await store.get_route(route.route_id)
+
+    assert record.status == SearchStatus.partial
+    assert record.last_update == 1
+    assert indexed_record.search_id == search_id
+    assert indexed_route == route
+
+
+@pytest.mark.asyncio
+async def test_run_search_use_case_publishes_partial_batch(
+    search_fixture: SearchFixture,
+) -> None:
+    search_store = InMemorySearchStore()
+    search_id = uuid4()
+    await search_store.create_search(
+        search_id=search_id,
+        criteria=search_fixture.criteria,
+        expires_at=utc_now() + timedelta(seconds=60),
+    )
+    first_candidate = RouteCandidate(
+        source="database",
+        segment_ids=(search_fixture.plane_segment.id,),
+        total_price=search_fixture.plane_segment.price_amount,
+        total_duration_minutes=search_fixture.plane_segment.duration_minutes,
+        transfers=0,
+    )
+    final_candidate = RouteCandidate(
+        source="database",
+        segment_ids=(search_fixture.train_segment.id,),
+        total_price=search_fixture.train_segment.price_amount,
+        total_duration_minutes=search_fixture.train_segment.duration_minutes,
+        transfers=0,
+    )
+    route_search = _ControlledBatchRouteSearch(
+        first_batch=[first_candidate],
+        final_batch=[first_candidate, final_candidate],
+    )
+    run_search_use_case = RunSearchUseCase(
+        route_search_port=route_search,
+        route_segment_reader=FakeRouteSegmentReader(
+            {
+                search_fixture.plane_segment.id: search_fixture.plane_segment,
+                search_fixture.train_segment.id: search_fixture.train_segment,
+            }
+        ),
+        search_state_store=search_store,
+    )
+    task = asyncio.create_task(
+        run_search_use_case.execute(
+            search_id=search_id,
+            criteria=search_fixture.criteria,
+        )
+    )
+
+    await route_search.partial_published.wait()
+    partial_record = await search_store.get_search(search_id)
+    partial_status = partial_record.status
+    partial_route_count = len(partial_record.routes)
+    partial_route_id = partial_record.routes[0].route_id
+    route_search.release_final.set()
+    final_routes = await task
+    complete_record = await search_store.get_search(search_id)
+
+    assert partial_status == SearchStatus.partial
+    assert partial_route_count == 1
+    assert complete_record.status == SearchStatus.complete
+    assert complete_record.routes[0].route_id == partial_route_id
+    assert len(final_routes) == 2
+
+
+@pytest.mark.asyncio
+async def test_create_search_use_case_returns_completed_search_from_cache(
+    search_fixture: SearchFixture,
+) -> None:
+    search_store = InMemorySearchStore()
+    cached_route = build_route_snapshot(
+        search_id=uuid4(),
+        candidate=RouteCandidate(
+            source="database",
+            segment_ids=(search_fixture.plane_segment.id,),
+            total_price=search_fixture.plane_segment.price_amount,
+            total_duration_minutes=search_fixture.plane_segment.duration_minutes,
+            transfers=0,
+        ),
+        segments=(search_fixture.plane_segment,),
+    )
+    cache = _FakeSearchResultsCache(routes=[cached_route])
+    runtime_coordinator = _FakeRuntimeCoordinator()
+    use_case = CreateSearchUseCase(
+        settings=Settings(search_ttl_seconds=60, search_poll_after_ms=100),
+        validator=SearchCriteriaValidator(
+            location_reader=FakeLocationReader(
+                {
+                    search_fixture.origin.id: search_fixture.origin,
+                    search_fixture.destination.id: search_fixture.destination,
+                }
+            )
+        ),
+        search_state_store=search_store,
+        runtime_coordinator=runtime_coordinator,
+        results_cache=cache,
+    )
+
+    handle = await use_case.execute(search_fixture.criteria)
+    record = await search_store.get_search(handle.search_id)
+
+    assert handle.status == SearchStatus.complete
+    assert record.status == SearchStatus.complete
+    assert record.routes[0].search_id == handle.search_id
+    assert record.routes[0].route_id != cached_route.route_id
+    assert runtime_coordinator.dispatch_calls == []
+
+
+@pytest.mark.asyncio
+async def test_run_search_use_case_stores_completed_routes_in_cache(
+    search_fixture: SearchFixture,
+) -> None:
+    search_store = InMemorySearchStore()
+    search_id = uuid4()
+    await search_store.create_search(
+        search_id=search_id,
+        criteria=search_fixture.criteria,
+        expires_at=utc_now() + timedelta(seconds=60),
+    )
+    candidate = RouteCandidate(
+        source="database",
+        segment_ids=(search_fixture.plane_segment.id,),
+        total_price=search_fixture.plane_segment.price_amount,
+        total_duration_minutes=search_fixture.plane_segment.duration_minutes,
+        transfers=0,
+    )
+    cache = _FakeSearchResultsCache()
+    aggregation_service = FakeRouteAggregationService(results=[candidate])
+    run_search_use_case = RunSearchUseCase(
+        route_search_port=aggregation_service,
+        route_segment_reader=FakeRouteSegmentReader(
+            {search_fixture.plane_segment.id: search_fixture.plane_segment}
+        ),
+        search_state_store=search_store,
+        results_cache=cache,
+    )
+
+    routes = await run_search_use_case.execute(
+        search_id=search_id,
+        criteria=search_fixture.criteria,
+    )
+
+    assert len(routes) == 1
+    assert cache.set_calls == [(search_fixture.criteria, routes)]
