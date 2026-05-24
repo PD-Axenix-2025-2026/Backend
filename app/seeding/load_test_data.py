@@ -129,7 +129,12 @@ def build_load_test_data_bundle(
     transfer_segments_target -= transfer_segments_target % 2
     guaranteed_direct_segments = days * GUARANTEED_DIRECT_ROUTES_PER_DAY
     guaranteed_transfer_segments = days * GUARANTEED_TRANSFER_ROUTES_PER_DAY * 2
-    direct_segments_target = target_segments - transfer_segments_target - guaranteed_direct_segments - guaranteed_transfer_segments
+    direct_segments_target = (
+        target_segments
+        - transfer_segments_target
+        - guaranteed_direct_segments
+        - guaranteed_transfer_segments
+    )
     if direct_segments_target < 0:
         direct_segments_target = 0
     transfer_routes_target = transfer_segments_target // 2
@@ -162,7 +167,12 @@ def build_load_test_data_bundle(
             (0, TransportType.plane, Decimal("3990.00"), 95),
             (1, TransportType.train, Decimal("2190.00"), 240),
         )
-        for route_index, (direct_route_index, transport_type, price_amount, duration_minutes) in enumerate(direct_guarantees):
+        for route_index, (
+            direct_route_index,
+            transport_type,
+            price_amount,
+            duration_minutes,
+        ) in enumerate(direct_guarantees):
             departure_at = guaranteed_departure_at + timedelta(minutes=route_index * 47)
             route_segments.append(
                 _build_route_segment(
@@ -221,8 +231,12 @@ def build_load_test_data_bundle(
             transfer_location = transfer_candidates[
                 transfer_route_index % len(transfer_candidates)
             ]
-            first_transport_type = TRANSPORT_TYPE_ORDER[(day_index + transfer_route_index + 1) % len(TRANSPORT_TYPE_ORDER)]
-            second_transport_type = TRANSPORT_TYPE_ORDER[(day_index + transfer_route_index + 2) % len(TRANSPORT_TYPE_ORDER)]
+            first_transport_type = TRANSPORT_TYPE_ORDER[
+                (day_index + transfer_route_index + 1) % len(TRANSPORT_TYPE_ORDER)
+            ]
+            second_transport_type = TRANSPORT_TYPE_ORDER[
+                (day_index + transfer_route_index + 2) % len(TRANSPORT_TYPE_ORDER)
+            ]
             first_departure_at = _build_departure_at(
                 travel_date=travel_date,
                 day_index=day_index,
@@ -238,10 +252,14 @@ def build_load_test_data_bundle(
                 route_index=transfer_route_index,
                 leg_index=1,
             )
-            first_arrival_at = first_departure_at + timedelta(minutes=first_duration_minutes)
+            first_arrival_at = first_departure_at + timedelta(
+                minutes=first_duration_minutes
+            )
             layover_minutes = max(
                 MIN_TRANSFER_LAYOVER_MINUTES,
-                _build_layover_minutes(day_index=day_index, route_index=transfer_route_index),
+                _build_layover_minutes(
+                    day_index=day_index, route_index=transfer_route_index
+                ),
             )
             second_departure_at = first_arrival_at + timedelta(minutes=layover_minutes)
             second_duration_minutes = _build_transfer_leg_duration_minutes(
@@ -251,7 +269,9 @@ def build_load_test_data_bundle(
                 route_index=transfer_route_index,
                 leg_index=2,
             )
-            second_arrival_at = second_departure_at + timedelta(minutes=second_duration_minutes)
+            second_arrival_at = second_departure_at + timedelta(
+                minutes=second_duration_minutes
+            )
             chain_token = (
                 f"{origin_city.code or str(origin_city.id)[:8]}->"
                 f"{transfer_location.code or str(transfer_location.id)[:8]}->"
@@ -628,7 +648,8 @@ def build_load_test_data_bundle(
         target_segments=target_segments,
         direct_segments=direct_segments_target + guaranteed_direct_segments,
         transfer_segments=transfer_segments,
-        transfer_routes=transfer_routes_target + (days * GUARANTEED_TRANSFER_ROUTES_PER_DAY),
+        transfer_routes=transfer_routes_target
+        + (days * GUARANTEED_TRANSFER_ROUTES_PER_DAY),
     )
 
 
@@ -659,7 +680,9 @@ async def _insert_route_segments(
 
 
 def _select_usable_locations(locations: Sequence[Location]) -> tuple[Location, ...]:
-    usable_locations = [location for location in locations if location.country_code == "RU"]
+    usable_locations = [
+        location for location in locations if location.country_code == "RU"
+    ]
     if not usable_locations:
         usable_locations = list(locations)
     return tuple(usable_locations)
@@ -678,7 +701,9 @@ def _find_location_by_code(
 def _build_carriers_by_transport_type(
     carriers: Sequence[Carrier],
 ) -> dict[TransportType, tuple[Carrier, ...]]:
-    carriers_by_transport_type: defaultdict[TransportType, list[Carrier]] = defaultdict(list)
+    carriers_by_transport_type: defaultdict[TransportType, list[Carrier]] = defaultdict(
+        list
+    )
     for carrier in carriers:
         if carrier.is_active:
             carriers_by_transport_type[carrier.transport_type].append(carrier)
@@ -692,9 +717,7 @@ def _build_carriers_by_transport_type(
 
 def _split_evenly(total: int, parts: int) -> tuple[int, ...]:
     base_value, remainder = divmod(total, parts)
-    return tuple(
-        base_value + (1 if index < remainder else 0) for index in range(parts)
-    )
+    return tuple(base_value + (1 if index < remainder else 0) for index in range(parts))
 
 
 def _pick_location(
@@ -773,7 +796,9 @@ def _build_direct_duration_minutes(
     }
     base_duration = base_durations[transport_type]
     duration_span = duration_spans[transport_type]
-    return base_duration + rng.randint(0, duration_span) + (day_index + route_index) % 45
+    return (
+        base_duration + rng.randint(0, duration_span) + (day_index + route_index) % 45
+    )
 
 
 def _build_transfer_leg_duration_minutes(
@@ -829,8 +854,7 @@ def _build_price_amount(
     transfer_multiplier = Decimal("0.88") if transfer_leg else Decimal("1.0")
     variation = Decimal((day_index * 41 + route_index * 17) % 97) / Decimal("100")
     price = (
-        base_prices[transport_type]
-        + price_spans[transport_type] * variation
+        base_prices[transport_type] + price_spans[transport_type] * variation
     ) * transfer_multiplier
     return price.quantize(RUB_QUANTIZER, rounding=ROUND_HALF_UP)
 
@@ -904,8 +928,7 @@ def _segment_code(
     origin_code = origin.code or str(origin.id)[:8]
     destination_code = destination.code or str(destination.id)[:8]
     return (
-        f"{prefix}-{day_index:02d}-{route_index:05d}-"
-        f"{origin_code}-{destination_code}"
+        f"{prefix}-{day_index:02d}-{route_index:05d}-{origin_code}-{destination_code}"
     )
 
 

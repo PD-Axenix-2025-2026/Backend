@@ -94,7 +94,9 @@ async def main() -> None:
 async def run_load_test(config: LoadTestConfig) -> LoadTestSummary:
     metrics: dict[str, RequestStats] = defaultdict(RequestStats)
     timeout = httpx.Timeout(config.request_timeout_seconds)
-    limits = httpx.Limits(max_connections=config.users * 4, max_keepalive_connections=config.users * 2)
+    limits = httpx.Limits(
+        max_connections=config.users * 4, max_keepalive_connections=config.users * 2
+    )
 
     async with httpx.AsyncClient(
         base_url=config.base_url,
@@ -105,7 +107,9 @@ async def run_load_test(config: LoadTestConfig) -> LoadTestSummary:
         origin_location, destination_location = await _resolve_locations(client, config)
         total_scenarios = config.users * config.iterations_per_user
         progress_queue: asyncio.Queue[None] = asyncio.Queue()
-        progress_task = asyncio.create_task(_progress_printer(progress_queue, total_scenarios))
+        progress_task = asyncio.create_task(
+            _progress_printer(progress_queue, total_scenarios)
+        )
         tasks = [
             asyncio.create_task(
                 _run_user(
@@ -207,7 +211,9 @@ async def _run_search_flow(
             },
             "date": travel_date.isoformat(),
             "passengers": {"adults": 1, "children": 0, "infants": 0},
-            "transport_types": [transport_type.value for transport_type in config.transport_types],
+            "transport_types": [
+                transport_type.value for transport_type in config.transport_types
+            ],
             "preferences": {
                 "sort": config.sort,
                 "max_transfers": config.max_transfers,
@@ -223,7 +229,9 @@ async def _run_search_flow(
         )
         create_response.raise_for_status()
         search_id = create_response.json()["search_id"]
-        poll_after_ms = int(create_response.json().get("poll_after_ms", config.poll_interval_ms))
+        poll_after_ms = int(
+            create_response.json().get("poll_after_ms", config.poll_interval_ms)
+        )
 
         route_id: str | None = None
         for _ in range(config.poll_attempts):
@@ -236,7 +244,8 @@ async def _run_search_flow(
                     "last_update": 0,
                     "sort": config.sort,
                     "transport_types": ",".join(
-                        transport_type.value for transport_type in config.transport_types
+                        transport_type.value
+                        for transport_type in config.transport_types
                     ),
                     "limit": config.results_limit,
                     "offset": 0,
@@ -281,6 +290,7 @@ async def _run_search_flow(
         except Exception:
             pass
 
+
 async def _resolve_locations(
     client: httpx.AsyncClient,
     config: LoadTestConfig,
@@ -311,12 +321,18 @@ async def _resolve_locations(
     )
     destination_response.raise_for_status()
 
-    origin_location = _pick_location_item(origin_response.json().get("items", []), "MOW")
-    destination_location = _pick_location_item(destination_response.json().get("items", []), "SPB")
+    origin_location = _pick_location_item(
+        origin_response.json().get("items", []), "MOW"
+    )
+    destination_location = _pick_location_item(
+        destination_response.json().get("items", []), "SPB"
+    )
     return origin_location, destination_location
 
 
-def _pick_location_item(items: list[dict[str, Any]], preferred_code: str) -> dict[str, Any]:
+def _pick_location_item(
+    items: list[dict[str, Any]], preferred_code: str
+) -> dict[str, Any]:
     for item in items:
         if item.get("code") == preferred_code:
             return item
@@ -334,7 +350,7 @@ def _print_connection_error(base_url: str) -> None:
     print(
         "Load test failed: backend API is not reachable at "
         f"{base_url}. Start the backend first, for example:\n"
-        "  Set-Location \"c:\\Users\\APETROSIA_PC\\Desktop\\progr\\ПД\\Backend\"\n"
+        '  Set-Location "c:\\Users\\APETROSIA_PC\\Desktop\\progr\\ПД\\Backend"\n'
         "  poetry run uvicorn app.main:app --reload\n"
         "If you are using Docker, make sure the backend container is running "
         "and that the URL matches the exposed port.",
@@ -382,7 +398,9 @@ def _parse_args() -> argparse.Namespace:
         default="http://127.0.0.1:8000",
         help="Base URL of the site or backend API to test.",
     )
-    parser.add_argument("--users", type=int, default=20, help="Concurrent virtual users.")
+    parser.add_argument(
+        "--users", type=int, default=20, help="Concurrent virtual users."
+    )
     parser.add_argument(
         "--iterations-per-user",
         type=int,
