@@ -32,8 +32,8 @@ TRANSPORT_TYPE_ORDER = (
     TransportType.train,
     TransportType.bus,
 )
-GUARANTEED_DIRECT_ROUTES_PER_DAY = 100
-GUARANTEED_TRANSFER_ROUTES_PER_DAY = max(1, GUARANTEED_DIRECT_ROUTES_PER_DAY // 10)
+GUARANTEED_DIRECT_ROUTES_PER_DAY = 4
+GUARANTEED_TRANSFER_ROUTES_PER_DAY = max(2, GUARANTEED_DIRECT_ROUTES_PER_DAY // 2)
 
 
 @dataclass(slots=True, frozen=True)
@@ -166,6 +166,8 @@ def build_load_test_data_bundle(
         direct_guarantees = (
             (0, TransportType.plane, Decimal("3990.00"), 95),
             (1, TransportType.train, Decimal("2190.00"), 240),
+            (2, TransportType.bus, Decimal("1490.00"), 180),
+            (3, TransportType.plane, Decimal("4290.00"), 130),
         )
         for route_index, (
             direct_route_index,
