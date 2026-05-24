@@ -201,6 +201,157 @@ def build_load_test_data_bundle(
             )
         )
 
+        # Guarantee at least one 1-transfer route MOW -> X -> SPB per day
+        try:
+            transfer_choice = None
+            for loc in transfer_pool:
+                if loc.id not in {origin_city.id, destination_city.id}:
+                    transfer_choice = loc
+                    break
+            if transfer_choice is not None:
+                transfer_location = transfer_choice
+                first_departure_at = _build_departure_at(
+                    travel_date=travel_date,
+                    day_index=day_index,
+                    route_index=0,
+                    window_minutes=TRANSFER_DEPARTURE_WINDOW_MINUTES,
+                    anchor_hour=6,
+                    salt=83,
+                )
+                first_duration_minutes = _build_transfer_leg_duration_minutes(
+                    rng,
+                    transport_type=TRANSPORT_TYPE_ORDER[(day_index + 1) % len(TRANSPORT_TYPE_ORDER)],
+                    day_index=day_index,
+                    route_index=0,
+                    leg_index=1,
+                )
+                first_arrival_at = first_departure_at + timedelta(minutes=first_duration_minutes)
+                layover_minutes = max(MIN_TRANSFER_LAYOVER_MINUTES, _build_layover_minutes(day_index=day_index, route_index=0))
+                second_departure_at = first_arrival_at + timedelta(minutes=layover_minutes)
+                second_duration_minutes = _build_transfer_leg_duration_minutes(
+                    rng,
+                    transport_type=TRANSPORT_TYPE_ORDER[(day_index + 2) % len(TRANSPORT_TYPE_ORDER)],
+                    day_index=day_index,
+                    route_index=0,
+                    leg_index=2,
+                )
+                second_arrival_at = second_departure_at + timedelta(minutes=second_duration_minutes)
+                chain_token = (
+                    f"{origin_city.code or str(origin_city.id)[:8]}->"
+                    f"{transfer_location.code or str(transfer_location.id)[:8]}->"
+                    f"{destination_city.code or str(destination_city.id)[:8]}"
+                )
+                route_segments.append(
+                    _build_route_segment(
+                        key=(
+                            "guaranteed-transfer",
+                            reference_date,
+                            day_index,
+                            "leg1",
+                            origin_city.code,
+                            transfer_location.code,
+                        ),
+                        origin=origin_city,
+                        destination=transfer_location,
+                        carrier=_pick_carrier(
+                            carriers_by_transport_type,
+                            transport_type=TRANSPORT_TYPE_ORDER[(day_index + 1) % len(TRANSPORT_TYPE_ORDER)],
+                            day_index=day_index,
+                            route_index=0,
+                        ),
+                        transport_type=TRANSPORT_TYPE_ORDER[(day_index + 1) % len(TRANSPORT_TYPE_ORDER)],
+                        segment_code=_segment_code(
+                            prefix="GTR1",
+                            day_index=day_index,
+                            route_index=0,
+                            origin=origin_city,
+                            destination=transfer_location,
+                        ),
+                        departure_at=first_departure_at,
+                        arrival_at=first_arrival_at,
+                        price_amount=_build_price_amount(
+                            transport_type=TRANSPORT_TYPE_ORDER[(day_index + 1) % len(TRANSPORT_TYPE_ORDER)],
+                            day_index=day_index,
+                            route_index=0,
+                            transfer_leg=True,
+                        ),
+                        available_seats=_build_available_seats(
+                            transport_type=TRANSPORT_TYPE_ORDER[(day_index + 1) % len(TRANSPORT_TYPE_ORDER)],
+                            route_index=0,
+                            transfer_leg=True,
+                        ),
+                        source_record_id=_source_record_id(
+                            prefix="guaranteed-transfer",
+                            base_date=reference_date,
+                            day_index=day_index,
+                            route_index=0,
+                            origin=origin_city,
+                            destination=transfer_location,
+                            departure_at=first_departure_at,
+                            chain_token=chain_token,
+                            extra="leg1",
+                        ),
+                        valid_from=reference_date - timedelta(days=30),
+                    )
+                )
+                route_segments.append(
+                    _build_route_segment(
+                        key=(
+                            "guaranteed-transfer",
+                            reference_date,
+                            day_index,
+                            "leg2",
+                            transfer_location.code,
+                            destination_city.code,
+                        ),
+                        origin=transfer_location,
+                        destination=destination_city,
+                        carrier=_pick_carrier(
+                            carriers_by_transport_type,
+                            transport_type=TRANSPORT_TYPE_ORDER[(day_index + 2) % len(TRANSPORT_TYPE_ORDER)],
+                            day_index=day_index,
+                            route_index=0,
+                        ),
+                        transport_type=TRANSPORT_TYPE_ORDER[(day_index + 2) % len(TRANSPORT_TYPE_ORDER)],
+                        segment_code=_segment_code(
+                            prefix="GTR2",
+                            day_index=day_index,
+                            route_index=0,
+                            origin=transfer_location,
+                            destination=destination_city,
+                        ),
+                        departure_at=second_departure_at,
+                        arrival_at=second_arrival_at,
+                        price_amount=_build_price_amount(
+                            transport_type=TRANSPORT_TYPE_ORDER[(day_index + 2) % len(TRANSPORT_TYPE_ORDER)],
+                            day_index=day_index,
+                            route_index=0,
+                            transfer_leg=True,
+                        ),
+                        available_seats=_build_available_seats(
+                            transport_type=TRANSPORT_TYPE_ORDER[(day_index + 2) % len(TRANSPORT_TYPE_ORDER)],
+                            route_index=0,
+                            transfer_leg=True,
+                        ),
+                        source_record_id=_source_record_id(
+                            prefix="guaranteed-transfer",
+                            base_date=reference_date,
+                            day_index=day_index,
+                            route_index=0,
+                            origin=transfer_location,
+                            destination=destination_city,
+                            departure_at=second_departure_at,
+                            chain_token=chain_token,
+                            extra="leg2",
+                        ),
+                        valid_from=reference_date - timedelta(days=30),
+                    )
+                )
+        except Exception:
+            # best effort: if something goes wrong while guaranteeing transfer chain,
+            # continue without failing the whole bundle generation
+            pass
+
         direct_count = direct_day_quotas[day_index]
         for route_index in range(direct_count):
             origin = _pick_location(

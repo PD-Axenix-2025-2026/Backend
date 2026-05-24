@@ -103,6 +103,9 @@ async def run_load_test(config: LoadTestConfig) -> LoadTestSummary:
     ) as client:
         await _check_backend_ready(client)
         origin_location, destination_location = await _resolve_locations(client, config)
+        total_scenarios = config.users * config.iterations_per_user
+        progress_queue: asyncio.Queue[None] = asyncio.Queue()
+        progress_task = asyncio.create_task(_progress_printer(progress_queue, total_scenarios))
         tasks = [
             asyncio.create_task(
                 _run_user(
@@ -112,11 +115,15 @@ async def run_load_test(config: LoadTestConfig) -> LoadTestSummary:
                     origin_location=origin_location,
                     destination_location=destination_location,
                     user_index=user_index,
+                    progress_queue=progress_queue,
                 )
             )
             for user_index in range(config.users)
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
+        # wait until progress consumer has processed all scenario completions
+        await progress_queue.join()
+        progress_task.cancel()
 
     total_failures = sum(stat.failures for stat in metrics.values())
     for result in results:
@@ -138,6 +145,7 @@ async def _run_user(
     origin_location: dict[str, Any],
     destination_location: dict[str, Any],
     user_index: int,
+    progress_queue: asyncio.Queue[None],
 ) -> None:
     rng = random.Random(20260522 + user_index)
     for iteration_index in range(config.iterations_per_user):
@@ -153,7 +161,26 @@ async def _run_user(
             travel_date=travel_date,
             user_index=user_index,
             iteration_index=iteration_index,
+            progress_queue=progress_queue,
         )
+
+
+async def _progress_printer(queue: asyncio.Queue[None], total: int) -> None:
+    """Consume completion signals and print an updating one-line progress indicator."""
+    completed = 0
+    try:
+        while completed < total:
+            await queue.get()
+            completed += 1
+            queue.task_done()
+            # carriage return to overwrite the same line for visibility
+            sys.stdout.write(f"\rScenario {completed}/{total}")
+            sys.stdout.flush()
+    except asyncio.CancelledError:
+        return
+    finally:
+        # ensure we end with a newline when done
+        print()
 
 
 async def _run_search_flow(
@@ -166,6 +193,7 @@ async def _run_search_flow(
     travel_date: date,
     user_index: int,
     iteration_index: int,
+    progress_queue: asyncio.Queue[None],
 ) -> None:
     payload = {
         "origin": {
@@ -245,7 +273,11 @@ async def _run_search_flow(
             json={"provider_offer_id": None},
         )
         checkout_response.raise_for_status()
-
+    # signal scenario completion for progress monitoring
+    try:
+        progress_queue.put_nowait(None)
+    except Exception:
+        pass
 
 async def _resolve_locations(
     client: httpx.AsyncClient,
