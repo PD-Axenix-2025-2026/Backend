@@ -1,7 +1,9 @@
 import asyncio
 import logging
+import re
 from collections.abc import Iterable, Sequence
 from datetime import datetime
+from math import inf
 from typing import cast
 from uuid import UUID
 
@@ -19,6 +21,40 @@ from app.services.search.planner import (
 )
 
 logger = logging.getLogger(__name__)
+
+_SOURCE_PRIORITY = {
+    "yandex_rasp_api": 0,
+    "rzd_api": 1,
+    "graph_search": 2,
+    "database": 3,
+}
+
+_CYRILLIC_CONFUSABLES = str.maketrans(
+    {
+        "\u0410": "A",
+        "\u0412": "B",
+        "\u0415": "E",
+        "\u041a": "K",
+        "\u041c": "M",
+        "\u041d": "H",
+        "\u041e": "O",
+        "\u0420": "P",
+        "\u0421": "C",
+        "\u0422": "T",
+        "\u0425": "X",
+        "\u0430": "A",
+        "\u0432": "B",
+        "\u0435": "E",
+        "\u043a": "K",
+        "\u043c": "M",
+        "\u043d": "H",
+        "\u043e": "O",
+        "\u0440": "P",
+        "\u0441": "C",
+        "\u0442": "T",
+        "\u0445": "X",
+    }
+)
 
 
 class RouteSearchOrchestratorError(Exception):
@@ -147,20 +183,74 @@ def _is_database_adapter(adapter: RouteSearchPort) -> bool:
 
 
 def _dedupe_candidates(candidates: Sequence[RouteCandidate]) -> list[RouteCandidate]:
-    deduped: list[RouteCandidate] = []
-    seen_keys: set[tuple[tuple[object, ...], ...]] = set()
+    return _prune_dominated_transfer_candidates(
+        _dedupe_exact_candidate_matches(candidates)
+    )
 
-    for candidate in candidates:
+
+def _dedupe_exact_candidate_matches(
+    candidates: Sequence[RouteCandidate],
+) -> list[RouteCandidate]:
+    entries: list[
+        tuple[int, tuple[tuple[object, ...], ...] | None, RouteCandidate | None]
+    ] = []
+    best_by_key: dict[tuple[tuple[object, ...], ...], RouteCandidate] = {}
+
+    for index, candidate in enumerate(candidates):
         dedupe_key = _build_candidate_dedupe_key(candidate)
         if dedupe_key is None:
-            deduped.append(candidate)
+            entries.append((index, None, candidate))
             continue
-        if dedupe_key in seen_keys:
+
+        if dedupe_key not in best_by_key:
+            entries.append((index, dedupe_key, None))
+            best_by_key[dedupe_key] = candidate
+        elif _is_candidate_better(candidate, best_by_key[dedupe_key]):
+            best_by_key[dedupe_key] = candidate
+
+    deduped: list[RouteCandidate] = []
+    for _index, dedupe_key, entry_candidate in entries:
+        if dedupe_key is None:
+            if entry_candidate is not None:
+                deduped.append(entry_candidate)
             continue
-        seen_keys.add(dedupe_key)
-        deduped.append(candidate)
+        deduped.append(best_by_key[dedupe_key])
 
     return deduped
+
+
+def _prune_dominated_transfer_candidates(
+    candidates: Sequence[RouteCandidate],
+) -> list[RouteCandidate]:
+    entries: list[
+        tuple[int, tuple[tuple[object, ...], str] | None, RouteCandidate | None]
+    ] = []
+    best_by_tail_key: dict[tuple[tuple[object, ...], str], RouteCandidate] = {}
+
+    for index, candidate in enumerate(candidates):
+        tail_key = _build_transfer_tail_key(candidate)
+        if tail_key is None:
+            entries.append((index, None, candidate))
+            continue
+
+        if tail_key not in best_by_tail_key:
+            entries.append((index, tail_key, None))
+            best_by_tail_key[tail_key] = candidate
+        elif _is_candidate_better_for_transfer_pruning(
+            candidate,
+            best_by_tail_key[tail_key],
+        ):
+            best_by_tail_key[tail_key] = candidate
+
+    pruned: list[RouteCandidate] = []
+    for _index, tail_key, entry_candidate in entries:
+        if tail_key is None:
+            if entry_candidate is not None:
+                pruned.append(entry_candidate)
+            continue
+        pruned.append(best_by_tail_key[tail_key])
+
+    return pruned
 
 
 def _build_candidate_dedupe_key(
@@ -177,41 +267,124 @@ def _build_segment_dedupe_key(
     segment: ResolvedRouteSegment,
 ) -> tuple[object, ...]:
     if isinstance(segment, ProviderRouteSegment):
-        origin_code = segment.origin_location.code
-        origin_label = segment.origin_location.name
-        destination_code = segment.destination_location.code
-        destination_label = segment.destination_location.name
+        origin_id = segment.origin_location.id
+        destination_id = segment.destination_location.id
         departure_at = segment.departure_at
         arrival_at = segment.arrival_at
         transport_type = segment.transport_type
-        carrier_code = segment.carrier_code
-        carrier_name = segment.carrier_name
         segment_code = segment.segment_code
     else:
-        origin_code = segment.origin_location.code
-        origin_label = segment.origin_location.name
-        destination_code = segment.destination_location.code
-        destination_label = segment.destination_location.name
+        origin_id = segment.origin_location.id
+        destination_id = segment.destination_location.id
         departure_at = segment.departure_at
         arrival_at = segment.arrival_at
         transport_type = segment.transport_type
-        carrier_code = segment.carrier.code
-        carrier_name = segment.carrier.name
         segment_code = segment.segment_code
 
     return (
-        origin_code or origin_label,
-        destination_code or destination_label,
+        origin_id,
+        destination_id,
         _normalize_datetime(departure_at),
         _normalize_datetime(arrival_at),
         transport_type.value,
-        carrier_code or carrier_name,
-        segment_code,
+        _normalize_segment_code(segment_code),
     )
 
 
 def _normalize_datetime(value: datetime) -> str:
     return value.isoformat()
+
+
+def _normalize_segment_code(value: str | None) -> str:
+    if value is None:
+        return ""
+
+    normalized = value.upper().translate(_CYRILLIC_CONFUSABLES)
+    normalized = "".join(normalized.split())
+    return re.sub(r"(?<=\d)[X/\\-](?=\d)", "/", normalized)
+
+
+def _is_candidate_better(
+    candidate: RouteCandidate,
+    current: RouteCandidate,
+) -> bool:
+    return _candidate_quality_key(candidate) < _candidate_quality_key(current)
+
+
+def _candidate_quality_key(candidate: RouteCandidate) -> tuple[object, ...]:
+    return (
+        candidate.total_price is None,
+        -_priced_segment_count(candidate),
+        _candidate_duration_minutes(candidate),
+        _source_priority(candidate.source),
+        tuple(str(segment_id) for segment_id in candidate.segment_ids),
+    )
+
+
+def _priced_segment_count(candidate: RouteCandidate) -> int:
+    return sum(
+        1 for segment in candidate.resolved_segments if segment.price_amount is not None
+    )
+
+
+def _candidate_duration_minutes(candidate: RouteCandidate) -> float:
+    if candidate.total_duration_minutes is not None:
+        return float(candidate.total_duration_minutes)
+    if candidate.resolved_segments:
+        return float(
+            int(
+                (
+                    candidate.resolved_segments[-1].arrival_at
+                    - candidate.resolved_segments[0].departure_at
+                ).total_seconds()
+                // 60
+            )
+        )
+    return inf
+
+
+def _source_priority(source: str) -> int:
+    return _SOURCE_PRIORITY.get(source, len(_SOURCE_PRIORITY))
+
+
+def _build_transfer_tail_key(
+    candidate: RouteCandidate,
+) -> tuple[tuple[object, ...], str] | None:
+    if candidate.transfers <= 0 or len(candidate.resolved_segments) < 2:
+        return None
+
+    tail_segments = candidate.resolved_segments[1:]
+    return (
+        tuple(
+            item
+            for segment in tail_segments
+            for item in _build_segment_dedupe_key(segment)
+        ),
+        _normalize_datetime(tail_segments[-1].arrival_at),
+    )
+
+
+def _is_candidate_better_for_transfer_pruning(
+    candidate: RouteCandidate,
+    current: RouteCandidate,
+) -> bool:
+    return _candidate_transfer_pruning_key(candidate) < _candidate_transfer_pruning_key(
+        current
+    )
+
+
+def _candidate_transfer_pruning_key(candidate: RouteCandidate) -> tuple[object, ...]:
+    return (
+        -_candidate_departure_timestamp(candidate),
+        _candidate_duration_minutes(candidate),
+        _candidate_quality_key(candidate),
+    )
+
+
+def _candidate_departure_timestamp(candidate: RouteCandidate) -> float:
+    if candidate.resolved_segments:
+        return candidate.resolved_segments[0].departure_at.timestamp()
+    return -inf
 
 
 def _build_graph_candidates(
