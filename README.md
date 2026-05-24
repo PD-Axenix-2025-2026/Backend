@@ -1,15 +1,19 @@
 # Аналитический сервис логистики путешествия
 
-Backend-каркас сервиса аналитики маршрутов на FastAPI.
+FastAPI backend для поиска маршрутов, автокомплита локаций, выдачи деталей маршрута и mock checkout-link.
+
+Сервис умеет искать маршруты в нескольких источниках, постепенно публиковать результаты для polling-фронта и кешировать завершённые поиски в Redis.
 
 ## Технологии
 
+- Python 3.12+
 - FastAPI
 - SQLAlchemy 2.x с асинхронным доступом
-- PostgreSQL и Redis в Docker-окружении разработки
-- SQLite как fallback-вариант вне Docker
+- SQLite для локального запуска по умолчанию
+- PostgreSQL и Redis в Docker Compose
+- Redis как optional cache завершённых поисков
 - Poetry для управления зависимостями
-- Docker Compose для запуска инфраструктуры
+- Ruff, mypy, pytest для проверок
 
 ## Docker Compose
 
@@ -139,16 +143,19 @@ docker compose --profile prod up --build
 
 ```text
 app/
-  api/           HTTP-слой
-  core/          конфигурация, логирование, БД, DI-контейнер
-  models/        ORM-модели
-  providers/     провайдеры источников маршрутов
-  repositories/  слой доступа к данным
-  scripts/       скрипты для заполнения базы данных
-  services/      бизнес-логика
-data/            вспомогательные данные, необходимые для работы с внешними api
-data_pipelines/  пайплайны для подготовки и обработки данных
-tests/           smoke-тесты wiring и служебных endpoint-ов
+  adapters/      адаптеры внешних и внутренних источников маршрутов
+  api/           HTTP слой, схемы запросов, сериализация
+  clients/       HTTP client factories
+  core/          конфиг, БД, Redis, DI container, logging
+  models/        SQLAlchemy ORM модели
+  repositories/  доступ к данным
+  schemas/       Pydantic response/request schemas
+  scripts/       seed/import/load-test scripts
+  services/      use cases, search logic, store, cache
+  utils/         общие утилиты
+data/            подготовленные справочники локаций
+data_pipelines/  notebooks/pipelines для подготовки данных
+tests/           unit и integration tests
 ```
 
 ## Локальный запуск
@@ -350,5 +357,18 @@ poetry run python -m app.scripts.import_rzd_and_yandex_locations --rzd-file data
 
 ## Текущее состояние
 
-На этом этапе backend уже поддерживает автокомплит локаций, запуск поиска маршрутов, polling результатов, деталку маршрута и mock checkout-link.
-Хранение search state в первой версии реализовано in-memory и не переживает рестарт процесса.
+Backend поддерживает:
+
+- autocomplete локаций;
+- создание search job;
+- progressive polling результатов;
+- дедупликацию маршрутов между источниками;
+- Redis cache завершённых поисков;
+- route detail endpoint;
+- mock checkout-link.
+
+Ограничения:
+
+- live search state хранится in-memory и не переживает рестарт backend-процесса;
+- Redis cache хранит только завершённые результаты, а не активные partial searches;
+- Docker Compose Redis настроен без persistence.
