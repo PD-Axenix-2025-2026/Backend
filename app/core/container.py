@@ -75,9 +75,11 @@ class AppContainer:
                 )
             )
 
-        # fallback на поиск в своей базе
-        if not used_adapters:
-            used_adapters.append(DatabaseRouteSearchAdapter(self.session_factory))
+        # Always include database adapter as a fallback source of routes
+        # so that local seeded data is considered even when external adapters
+        # (RZD / Yandex) are enabled. Database adapter is appended last so
+        # external providers can still take precedence when appropriate.
+        used_adapters.append(DatabaseRouteSearchAdapter(self.session_factory))
 
         self.route_search = RouteSearchOrchestrator(adapters=used_adapters)
 

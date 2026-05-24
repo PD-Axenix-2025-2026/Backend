@@ -224,7 +224,8 @@ async def _run_search_flow(
 
     if route_id is None:
         raise RuntimeError(
-            f"Search did not complete for user={user_index} iteration={iteration_index}"
+            "Search did not complete after "
+            f"{config.poll_attempts} polls for user={user_index} iteration={iteration_index}"
         )
 
     detail_response = await _timed_request(
@@ -391,8 +392,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--poll-attempts",
         type=int,
-        default=8,
-        help="Maximum number of results polls per search.",
+        default=30,
+        help=(
+            "Maximum number of results polls per search. "
+            "Defaults to 30 so the test waits longer for background search completion."
+        ),
     )
     parser.add_argument(
         "--poll-interval-ms",

@@ -18,7 +18,7 @@ from app.seeding.builders import stable_uuid
 
 DEFAULT_LOAD_TEST_BASE_DATE = date(2026, 5, 22)
 DEFAULT_LOAD_TEST_DAYS = 30
-DEFAULT_LOAD_TEST_TARGET_SEGMENTS = 50_000
+DEFAULT_LOAD_TEST_TARGET_SEGMENTS = 5_000
 DEFAULT_LOAD_TEST_RANDOM_SEED = 20260522
 DEFAULT_LOAD_TEST_BATCH_SIZE = 2_000
 SOURCE_SYSTEM_NAME = "load_test_seed"
@@ -119,10 +119,20 @@ def build_load_test_data_bundle(
     if not carriers_by_transport_type:
         raise ValueError("No active carriers were found for load-test generation")
 
+    origin_city = _find_location_by_code(usable_locations, "MOW")
+    destination_city = _find_location_by_code(usable_locations, "SPB")
+
     rng = Random(random_seed)
     transfer_segments_target = target_segments - (target_segments // 2)
     transfer_segments_target -= transfer_segments_target % 2
-    direct_segments_target = target_segments - transfer_segments_target
+    guaranteed_direct_segments = days
+    direct_segments_target = (
+        target_segments - transfer_segments_target - guaranteed_direct_segments
+    )
+    if direct_segments_target < 0:
+        raise ValueError(
+            "target_segments is too small to reserve one guaranteed Moscow-SPB route per day"
+        )
     transfer_routes_target = transfer_segments_target // 2
 
     direct_day_quotas = _split_evenly(direct_segments_target, days)
@@ -140,6 +150,56 @@ def build_load_test_data_bundle(
     route_segments: list[RouteSegment] = []
     for day_index in range(days):
         travel_date = reference_date + timedelta(days=day_index)
+
+        guaranteed_departure_at = _build_departure_at(
+            travel_date=travel_date,
+            day_index=day_index,
+            route_index=0,
+            window_minutes=DIRECT_DEPARTURE_WINDOW_MINUTES,
+            anchor_hour=7,
+            salt=7,
+        )
+        route_segments.append(
+            _build_route_segment(
+                key=(
+                    "guaranteed-direct",
+                    reference_date,
+                    day_index,
+                    origin_city.code,
+                    destination_city.code,
+                ),
+                origin=origin_city,
+                destination=destination_city,
+                carrier=_pick_carrier(
+                    carriers_by_transport_type,
+                    transport_type=TransportType.plane,
+                    day_index=day_index,
+                    route_index=0,
+                ),
+                transport_type=TransportType.plane,
+                segment_code=_segment_code(
+                    prefix="MOW-SPB",
+                    day_index=day_index,
+                    route_index=0,
+                    origin=origin_city,
+                    destination=destination_city,
+                ),
+                departure_at=guaranteed_departure_at,
+                arrival_at=guaranteed_departure_at + timedelta(minutes=95),
+                price_amount=Decimal("3990.00"),
+                available_seats=24,
+                source_record_id=_source_record_id(
+                    prefix="guaranteed-direct",
+                    base_date=reference_date,
+                    day_index=day_index,
+                    route_index=0,
+                    origin=origin_city,
+                    destination=destination_city,
+                    departure_at=guaranteed_departure_at,
+                ),
+                valid_from=reference_date - timedelta(days=30),
+            )
+        )
 
         direct_count = direct_day_quotas[day_index]
         for route_index in range(direct_count):
@@ -401,7 +461,7 @@ def build_load_test_data_bundle(
         base_date=reference_date,
         days=days,
         target_segments=target_segments,
-        direct_segments=direct_segments_target,
+        direct_segments=direct_segments_target + guaranteed_direct_segments,
         transfer_segments=transfer_segments,
         transfer_routes=transfer_routes_target,
     )
@@ -438,6 +498,16 @@ def _select_usable_locations(locations: Sequence[Location]) -> tuple[Location, .
     if not usable_locations:
         usable_locations = list(locations)
     return tuple(usable_locations)
+
+
+def _find_location_by_code(
+    locations: Sequence[Location],
+    code: str,
+) -> Location:
+    for location in locations:
+        if location.code == code:
+            return location
+    raise ValueError(f"Location with code {code} was not found")
 
 
 def _build_carriers_by_transport_type(
