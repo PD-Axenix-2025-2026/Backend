@@ -26,6 +26,7 @@ def test_build_load_test_data_bundle_generates_transfer_chains() -> None:
     for segment in bundle.route_segments:
         assert segment.departure_at.date() >= BASE_DATE
         assert segment.source_system == "load_test_seed"
+        assert segment.source_record_id is not None
         chain_key = segment.source_record_id.rsplit(":", 1)[0]
         segments_by_chain[chain_key].append(segment)
 

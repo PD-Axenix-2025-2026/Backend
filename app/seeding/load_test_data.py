@@ -213,7 +213,7 @@ def build_load_test_data_bundle(
                         destination=destination_city,
                         departure_at=departure_at,
                     ),
-                    valid_from=reference_date - timedelta(days=30),
+                    valid_from=_build_valid_from(reference_date - timedelta(days=30)),
                 )
             )
 
@@ -329,7 +329,7 @@ def build_load_test_data_bundle(
                         chain_token=chain_token,
                         extra="leg1",
                     ),
-                    valid_from=reference_date - timedelta(days=30),
+                    valid_from=_build_valid_from(reference_date - timedelta(days=30)),
                 )
             )
             route_segments.append(
@@ -383,7 +383,7 @@ def build_load_test_data_bundle(
                         chain_token=chain_token,
                         extra="leg2",
                     ),
-                    valid_from=reference_date - timedelta(days=30),
+                    valid_from=_build_valid_from(reference_date - timedelta(days=30)),
                 )
             )
 
@@ -470,7 +470,7 @@ def build_load_test_data_bundle(
                         destination=destination,
                         departure_at=departure_at,
                     ),
-                    valid_from=reference_date - timedelta(days=30),
+                    valid_from=_build_valid_from(reference_date - timedelta(days=30)),
                 )
             )
 
@@ -596,7 +596,7 @@ def build_load_test_data_bundle(
                         chain_token=chain_token,
                         extra="leg1",
                     ),
-                    valid_from=reference_date - timedelta(days=30),
+                    valid_from=_build_valid_from(reference_date - timedelta(days=30)),
                 )
             )
             route_segments.append(
@@ -637,7 +637,7 @@ def build_load_test_data_bundle(
                         chain_token=chain_token,
                         extra="leg2",
                     ),
-                    valid_from=reference_date - timedelta(days=30),
+                    valid_from=_build_valid_from(reference_date - timedelta(days=30)),
                 )
             )
 
@@ -776,6 +776,10 @@ def _build_departure_at(
         travel_date,
         time(hour=anchor_hour, minute=0),
     ) + timedelta(minutes=offset_minutes)
+
+
+def _build_valid_from(valid_from_date: date) -> datetime:
+    return datetime.combine(valid_from_date, time.min)
 
 
 def _build_direct_duration_minutes(

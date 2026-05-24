@@ -9,7 +9,7 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 import httpx
 
@@ -363,13 +363,13 @@ def _print_connection_error(base_url: str) -> None:
 async def _timed_request(
     metrics: dict[str, RequestStats],
     metric_name: str,
-    request_callable: Any,
+    request_callable: Callable[..., Awaitable[httpx.Response]],
     *args: Any,
     **kwargs: Any,
 ) -> httpx.Response:
     started_at = time.perf_counter()
     try:
-        response = await request_callable(*args, **kwargs)
+        response: httpx.Response = await request_callable(*args, **kwargs)
     except Exception:
         metrics[metric_name].add_failure()
         raise
